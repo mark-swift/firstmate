@@ -187,10 +187,15 @@ linear_resolve_repo() {
   local issue=$1 map=${2:-${LINEAR_PROJECTS_MAP:-$FM_HOME/config/linear-projects.tsv}}
   local label_repo repo_field pid pname tid tkey tname repo
 
-  # 1. Explicit per-issue override.
+  # 1. Explicit per-issue override. Accept both label shapes: a plain string
+  # array (.labels[] strings) and Linear's native object (.labels.nodes[].name,
+  # which is what the poll stashes into the inbox node).
   label_repo=$(printf '%s' "$issue" | jq -r '
-    ((.labels // []) | map(select(type == "string"))
-      | map(select(test("^repo:"))) | (.[0] // "") | sub("^repo:"; "") | gsub("^\\s+|\\s+$"; ""))' 2>/dev/null) || label_repo=
+    [ (.labels // {}) as $l
+      | if ($l | type) == "array" then $l[] else ($l.nodes // [])[] end
+      | if type == "string" then . else (.name // empty) end ]
+    | map(select(type == "string" and test("^repo:")))
+    | (.[0] // "") | sub("^repo:"; "") | gsub("^\\s+|\\s+$"; "")' 2>/dev/null) || label_repo=
   if [ -n "$label_repo" ]; then printf '%s' "$label_repo"; return 0; fi
   repo_field=$(printf '%s' "$issue" | jq -r '((.repositoryField // "") | tostring | gsub("^\\s+|\\s+$"; ""))' 2>/dev/null) || repo_field=
   if [ -n "$repo_field" ]; then printf '%s' "$repo_field"; return 0; fi

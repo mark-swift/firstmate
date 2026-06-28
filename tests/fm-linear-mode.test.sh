@@ -255,6 +255,29 @@ test_poll_groom_requires_new_nonbot_comment() {
   pass "fm-linear-poll grooms on a new non-bot comment, never on a bot comment"
 }
 
+test_poll_groom_after_first_sight_without_comments() {
+  local home fakebin out rc b0 b1
+  home="$TMP_ROOT/poll-groom-empty"; mkdir -p "$home"
+  fakebin=$(make_fake_curl "$home")
+  printf 'LINEAR_API_KEY=lin_k\nLINEAR_BOT_USER_ID=bot-1\n' > "$home/.env"
+  # First sight of a backlog item with NO comments: witnessed, but silent.
+  b0=$(issue_body '{"id":"iss-ge","identifier":"ENG-9","title":"groom","state":{"name":"Backlog","type":"backlog"},"team":{"id":"t","key":"E","name":"E"},"project":{"id":"p","name":"W"},"labels":{"nodes":[]},"comments":{"nodes":[]}}')
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$b0" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll groom empty first-sight exit"
+  [ -z "$out" ] || fail "first sight of a comment-less backlog item must be silent (got: $out)"
+  # Its FIRST non-bot comment after watching began must groom (no swallowed comment).
+  b1=$(issue_body '{"id":"iss-ge","identifier":"ENG-9","title":"groom","state":{"name":"Backlog","type":"backlog"},"team":{"id":"t","key":"E","name":"E"},"project":{"id":"p","name":"W"},"labels":{"nodes":[]},"comments":{"nodes":[{"id":"c1","createdAt":"2024-05-05T00:00:00.000Z","user":{"id":"alice"}}]}}')
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$b1" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll groom empty exit"
+  [ "$out" = "linear-groom iss-ge" ] \
+    || fail "the first comment on a witnessed comment-less backlog item must groom (got: $out)"
+  [ "$(jq -r .event "$home/state/linear-inbox/iss-ge.json")" = "linear-groom" ] \
+    || fail "stashed groom inbox must carry the event type"
+  pass "fm-linear-poll grooms the first comment on a witnessed comment-less backlog item"
+}
+
 test_poll_canceled_requires_witnessed_transition() {
   local home fakebin out rc backlog canceled
   home="$TMP_ROOT/poll-cancel"; mkdir -p "$home"
@@ -378,6 +401,8 @@ test_lib_resolve_repo_layers() {
   }
   [ "$(run '{"labels":["bug","repo:override"],"project":{"name":"Web App"}}')" = "override" ] \
     || fail "a repo: label must override the project map"
+  [ "$(run '{"labels":{"nodes":[{"name":"bug"},{"name":"repo:nativeoverride"}]},"project":{"name":"Web App"}}')" = "nativeoverride" ] \
+    || fail "a repo: label in Linear's native nodes[].name shape must override the project map"
   [ "$(run '{"repositoryField":"field-repo","project":{"name":"Web App"}}')" = "field-repo" ] \
     || fail "a Repository field must override the project map"
   [ "$(run '{"project":{"id":"x","name":"Web App"}}')" = "projects/web" ] \
@@ -526,6 +551,7 @@ test_poll_graphql_errors_report_controlled_message
 test_poll_missing_dep_reports_error
 test_poll_ready_wakes_and_dedupes
 test_poll_groom_requires_new_nonbot_comment
+test_poll_groom_after_first_sight_without_comments
 test_poll_canceled_requires_witnessed_transition
 test_poll_first_sight_canceled_is_silent
 test_poll_rejects_unsafe_issue_id

@@ -156,8 +156,11 @@ while IFS= read -r obj; do
     backlog)
       prevc=$(cat "$SEEN/$iid.comment" 2>/dev/null || true)
       if [ -n "$cts" ]; then
-        # First sight records the marker silently; later newer non-bot comments groom.
-        if [ -n "$prevc" ] && [[ "$cts" > "$prevc" ]]; then
+        # Groom only on a ticket we have witnessed before (prevstate non-empty),
+        # so first sight records the marker silently and pre-existing comment
+        # history never floods a fresh home. A witnessed ticket grooms when there
+        # is a non-bot comment that is new: no marker recorded yet, or newer than it.
+        if [ -n "$prevstate" ] && { [ -z "$prevc" ] || [[ "$cts" > "$prevc" ]]; }; then
           event=linear-groom
         fi
         printf '%s' "$cts" > "$SEEN/$iid.comment" 2>/dev/null || true
