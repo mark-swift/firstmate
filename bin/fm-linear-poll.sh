@@ -70,6 +70,9 @@ command -v jq   >/dev/null 2>&1 || { emit_error_once "missing jq"; exit 0; }
 BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-linear-poll.XXXXXX") || exit 0
 trap 'rm -f "$BODY_FILE"' EXIT
 
+# issues(first: 50) is an intentional slice-1 bound; a fleet with >50 bot-assigned
+# tickets would miss the overflow. comments are fetched newest-first so a busy
+# ticket's latest comment is always within the page that grooming keys off.
 read -r -d '' QUERY <<'GQL' || true
 query FmLinearPoll($bot: ID) {
   issues(first: 50, filter: { assignee: { id: { eq: $bot } } }) {
@@ -81,7 +84,7 @@ query FmLinearPoll($bot: ID) {
       team { id key name }
       project { id name }
       labels { nodes { name } }
-      comments(first: 50) { nodes { id createdAt user { id } } }
+      comments(first: 50, orderBy: { createdAt: DESC }) { nodes { id createdAt user { id } } }
     }
   }
 }
@@ -124,6 +127,18 @@ NODES=$(jq -c --arg bot "$LINEAR_BOT" '
 SEEN="$STATE/linear-seen"
 INBOX="$STATE/linear-inbox"
 
+# Advance the per-issue seen markers from the current loop iteration's $iid/$kind/
+# $cts. For an issue with NO event this is the silent baseline; for an EVENT issue
+# it is called only after a successful inbox stash, so a transient stash failure
+# leaves the markers unadvanced and the wake re-fires on a later poll once the
+# cause is repaired (at-least-once delivery).
+advance_markers() {
+  printf '%s' "$kind" > "$SEEN/$iid.state" 2>/dev/null || true
+  if [ "$kind" = backlog ] && [ -n "$cts" ]; then
+    printf '%s' "$cts" > "$SEEN/$iid.comment" 2>/dev/null || true
+  fi
+}
+
 while IFS= read -r obj; do
   [ -n "$obj" ] || continue
   iid=$(printf '%s' "$obj" | jq -r '.id // ""' 2>/dev/null) || continue
@@ -163,20 +178,21 @@ while IFS= read -r obj; do
         if [ -n "$prevstate" ] && { [ -z "$prevc" ] || [[ "$cts" > "$prevc" ]]; }; then
           event=linear-groom
         fi
-        printf '%s' "$cts" > "$SEEN/$iid.comment" 2>/dev/null || true
       fi
       ;;
   esac
 
-  printf '%s' "$kind" > "$SEEN/$iid.state" 2>/dev/null || true
-
-  [ -n "$event" ] || continue
+  if [ -z "$event" ]; then
+    advance_markers
+    continue
+  fi
 
   mkdir -p "$INBOX" 2>/dev/null || { emit_error_once "cannot create inbox"; exit 0; }
   if jq -c --arg id "$iid" --arg ev "$event" \
       '(.data.issues.nodes[]? | select(.id == $id)) + {event: $ev}' \
       "$BODY_FILE" > "$INBOX/$iid.json.tmp" 2>/dev/null; then
     if mv -f "$INBOX/$iid.json.tmp" "$INBOX/$iid.json" 2>/dev/null; then
+      advance_markers
       printf '%s %s\n' "$event" "$iid"
     else
       rm -f "$INBOX/$iid.json.tmp"

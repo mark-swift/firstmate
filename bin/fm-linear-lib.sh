@@ -78,18 +78,21 @@ linear_load_config() {
   # State mapping. A non-empty resolved value (from env or .env) is "configured":
   # it is matched by name and the type fallback is disabled for that kind. An
   # empty value falls back to a sensible default name AND enables the type
-  # fallback. Names are stored lowercased for case-insensitive comparison.
+  # fallback. Names are stored lowercased for case-insensitive comparison. The
+  # resolved result lands in DISTINCT output names (LINEAR_*_NAME/_SET) so the
+  # input env vars (LINEAR_STATE_*) are never overwritten and repeated calls in
+  # one process stay idempotent.
   if [ -n "${LINEAR_STATE_READY+x}" ]; then raw=${LINEAR_STATE_READY-}; else raw=$(linear_env_get LINEAR_STATE_READY "$env_file"); fi
-  if [ -n "$raw" ]; then LINEAR_STATE_READY_SET=1; else LINEAR_STATE_READY_SET=0; raw=Ready; fi
-  LINEAR_STATE_READY=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+  if [ -n "$raw" ]; then LINEAR_READY_SET=1; else LINEAR_READY_SET=0; raw=Ready; fi
+  LINEAR_READY_NAME=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
 
   if [ -n "${LINEAR_STATE_BACKLOG+x}" ]; then raw=${LINEAR_STATE_BACKLOG-}; else raw=$(linear_env_get LINEAR_STATE_BACKLOG "$env_file"); fi
-  if [ -n "$raw" ]; then LINEAR_STATE_BACKLOG_SET=1; else LINEAR_STATE_BACKLOG_SET=0; raw=Backlog; fi
-  LINEAR_STATE_BACKLOG=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+  if [ -n "$raw" ]; then LINEAR_BACKLOG_SET=1; else LINEAR_BACKLOG_SET=0; raw=Backlog; fi
+  LINEAR_BACKLOG_NAME=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
 
   if [ -n "${LINEAR_STATE_CANCELED+x}" ]; then raw=${LINEAR_STATE_CANCELED-}; else raw=$(linear_env_get LINEAR_STATE_CANCELED "$env_file"); fi
-  if [ -n "$raw" ]; then LINEAR_STATE_CANCELED_SET=1; else LINEAR_STATE_CANCELED_SET=0; raw=Canceled; fi
-  LINEAR_STATE_CANCELED=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+  if [ -n "$raw" ]; then LINEAR_CANCELED_SET=1; else LINEAR_CANCELED_SET=0; raw=Canceled; fi
+  LINEAR_CANCELED_NAME=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
 }
 
 # linear_state_kind <state-name> <state-type> -> ready|backlog|canceled|other.
@@ -102,12 +105,12 @@ linear_state_kind() {
   local name=$1 type=$2 ln lt
   ln=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
   lt=$(printf '%s' "$type" | tr '[:upper:]' '[:lower:]')
-  if [ "$ln" = "$LINEAR_STATE_READY" ]; then echo ready; return; fi
-  if [ "$ln" = "$LINEAR_STATE_BACKLOG" ]; then echo backlog; return; fi
-  if [ "$ln" = "$LINEAR_STATE_CANCELED" ]; then echo canceled; return; fi
-  if [ "$LINEAR_STATE_READY_SET" = 0 ] && [ "$lt" = unstarted ]; then echo ready; return; fi
-  if [ "$LINEAR_STATE_BACKLOG_SET" = 0 ] && [ "$lt" = backlog ]; then echo backlog; return; fi
-  if [ "$LINEAR_STATE_CANCELED_SET" = 0 ] && [ "$lt" = canceled ]; then echo canceled; return; fi
+  if [ "$ln" = "$LINEAR_READY_NAME" ]; then echo ready; return; fi
+  if [ "$ln" = "$LINEAR_BACKLOG_NAME" ]; then echo backlog; return; fi
+  if [ "$ln" = "$LINEAR_CANCELED_NAME" ]; then echo canceled; return; fi
+  if [ "$LINEAR_READY_SET" = 0 ] && [ "$lt" = unstarted ]; then echo ready; return; fi
+  if [ "$LINEAR_BACKLOG_SET" = 0 ] && [ "$lt" = backlog ]; then echo backlog; return; fi
+  if [ "$LINEAR_CANCELED_SET" = 0 ] && [ "$lt" = canceled ]; then echo canceled; return; fi
   echo other
 }
 

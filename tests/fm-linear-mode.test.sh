@@ -327,6 +327,36 @@ test_poll_rejects_unsafe_issue_id() {
   pass "fm-linear-poll rejects an unsafe issue id (path-traversal guard)"
 }
 
+test_poll_stash_failure_keeps_at_least_once() {
+  local home fakebin out rc body
+  home="$TMP_ROOT/poll-stash-fail"; mkdir -p "$home"
+  fakebin=$(make_fake_curl "$home")
+  # A failing mv stub makes the inbox commit fail; the seen marker must not advance.
+  cat > "$fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$fakebin/mv"
+  printf 'LINEAR_API_KEY=lin_k\nLINEAR_BOT_USER_ID=bot-1\n' > "$home/.env"
+  body=$(issue_body '{"id":"iss-sf","identifier":"ENG-7","title":"do it","state":{"name":"Ready","type":"unstarted"},"team":{"id":"t","key":"E","name":"E"},"project":{"id":"p","name":"W"},"labels":{"nodes":[]},"comments":{"nodes":[]}}')
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$body" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll stash failure exit"
+  [ "$out" = "linear-error cannot write inbox" ] \
+    || fail "a failed inbox stash must emit an error, not a wake (got: $out)"
+  assert_absent "$home/state/linear-inbox/iss-sf.json" "a failed stash must not leave an inbox file"
+  assert_absent "$home/state/linear-seen/iss-sf.state" "a failed stash must not advance the seen marker"
+  # With mv restored, the same ready ticket must re-emit (at-least-once delivery).
+  rm -f "$fakebin/mv"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$body" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll stash recovery exit"
+  [ "$out" = "linear-ready iss-sf" ] \
+    || fail "a ready ticket whose stash transiently failed must re-emit (got: $out)"
+  assert_present "$home/state/linear-seen/iss-sf.state" "a successful stash must advance the seen marker"
+  pass "fm-linear-poll re-emits a ready wake after a transient inbox stash failure"
+}
+
 # ---------------------------------------------------------------------------
 # Library: config, auth header, state classification, resolver, meta links
 
@@ -387,6 +417,23 @@ test_lib_state_name_then_type_fallback() {
   [ "$out" = "ready other other" ] \
     || fail "a configured name must match by name and turn off type fallback (got: $out)"
   pass "linear_state_kind matches configured names first, falls back to type otherwise"
+}
+
+test_lib_load_config_idempotent() {
+  local out
+  # Two calls in one process must not disable the type fallback: the resolver
+  # writes its result into distinct output vars, never back over the input env.
+  out=$(FM_HOME="$TMP_ROOT" bash -c '
+    . "'"$ROOT"'/bin/fm-linear-lib.sh"
+    linear_load_config
+    linear_load_config
+    printf "%s %s %s\n" \
+      "$(linear_state_kind Todo unstarted)" \
+      "$(linear_state_kind Backlog backlog)" \
+      "$(linear_state_kind Canceled canceled)"')
+  [ "$out" = "ready backlog canceled" ] \
+    || fail "repeated linear_load_config must keep the type fallback (got: $out)"
+  pass "linear_load_config is idempotent across repeated calls in one process"
 }
 
 test_lib_resolve_repo_layers() {
@@ -555,9 +602,11 @@ test_poll_groom_after_first_sight_without_comments
 test_poll_canceled_requires_witnessed_transition
 test_poll_first_sight_canceled_is_silent
 test_poll_rejects_unsafe_issue_id
+test_poll_stash_failure_keeps_at_least_once
 test_lib_env_over_dotenv_precedence
 test_lib_auth_header_raw_key_0600
 test_lib_state_name_then_type_fallback
+test_lib_load_config_idempotent
 test_lib_resolve_repo_layers
 test_lib_meta_link_set_get_clear
 test_bootstrap_activates_on_env_key
