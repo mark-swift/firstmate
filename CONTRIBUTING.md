@@ -72,6 +72,7 @@ tests/fm-afk-inject-e2e.test.sh           # private-socket end-to-end test of th
 tests/fm-bootstrap.test.sh                # bootstrap dependency and feature-probe tests
 tests/fm-fleet-sync.test.sh               # project clone refresh: safe detached recovery, STUCK drift reports, benign skips, and bootstrap relay
 tests/fm-x-mode.test.sh                   # X-mode poll, inbox context round-trip, reply threading, dismiss, dry-run preview, and .env-presence activation tests
+tests/fm-linear-mode.test.sh              # Linear-mode poll wakes (ready/canceled/groom), per-issue seen-marker dedupe, lib config precedence, raw-key 0600 auth header, state name->type fallback, project resolver layers, meta links, rate-limited errors, and .env-presence activation tests
 tests/fm-tangle-guard.test.sh             # primary-checkout tangle detection and spawn/brief isolation tests
 tests/fm-spawn-batch.test.sh              # batch dispatch and FM_HOME project-path scoping tests
 tests/fm-update.test.sh                   # fast-forward-only self-update, reread, nudge, dedup, and skip-safety tests

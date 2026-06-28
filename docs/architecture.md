@@ -18,6 +18,7 @@ Crew status files are append-only wake-event logs, not current-state fields.
 `bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes the matching no-mistakes run, active or terminal, to the crew's own branch and keeps that run-step authoritative even if the pane has closed.
 Only when no matching run exists does it fall back to the pane busy-signature and then the status log; a dead pane without a run reports unknown instead of trusting a stale log.
 Optional X mode rides the same check path: bootstrap drops a local `state/x-watch.check.sh` shim only after the user opts in with `FMX_PAIRING_TOKEN`, and non-X homes keep the default watcher behavior.
+Optional Linear mode rides that same check path with `state/linear-watch.check.sh`, gated on `LINEAR_API_KEY`.
 
 Routine re-arms go through `bin/fm-watch-arm.sh`, which forks the watcher as a tracked child, verifies it is genuinely alive with a fresh liveness beacon, and prints exactly one honest status line (`started` / `healthy` / `FAILED`, the last exiting non-zero) - never a false `already running` off a dying process.
 Its `--restart` mode signals only the watcher recorded in the current home's `state/.watch.lock`, so restarting one home cannot kill sibling secondmate watchers.
@@ -100,6 +101,18 @@ Pure acknowledgments or mentions with nothing to answer are dismissed through `b
 Concise replies stay single unnumbered tweets; genuinely long replies are split by the client into bounded, numbered text threads on word boundaries, with `texts` carrying the ordered chunks for the relay.
 For preview testing, `FMX_DRY_RUN` makes `fm-x-reply.sh` and `fm-x-dismiss.sh` skip the public post or dismiss call and record the full would-be payload under `state/x-outbox/`, including `texts` when the reply would be a thread and an `endpoint` marker when the preview is a completion follow-up or dismiss, while the rest of the poll -> compose -> would-post loop still succeeds.
 The watcher, wake queue, arm wrapper, and afk daemon are unchanged; X mode is layered on top through the existing check mechanism.
+
+## Optional Linear mode
+
+Linear mode is opt-in use of Linear as a work source: the captain assigns ready, bot-owned tickets and firstmate ships them through no-mistakes as PRs the captain reviews and merges.
+This slice ships only the inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes; the responder skill and the active ship/review lifecycle land in a later slice.
+A user enables it by putting `LINEAR_API_KEY` in the firstmate home's gitignored `.env`; the raw key authenticates Linear's GraphQL API with no `Bearer` prefix, and assignment to the bot user (`LINEAR_BOT_USER_ID`) is the single ownership signal.
+On bootstrap, that key creates two local artifacts: `state/linear-watch.check.sh`, which performs one bounded GraphQL poll through `bin/fm-linear-poll.sh`, and `config/linear.env`, which sets `FM_CHECK_INTERVAL=60` for watcher arms in that home.
+Without the key, bootstrap removes those artifacts on opt-out and otherwise stays silent, so non-Linear users see no behavior change.
+For each bot-assigned ticket the poll emits at most one wake per genuine transition - `linear-ready`, `linear-canceled`, or `linear-groom <issue-id>` - deduped via per-issue seen-markers under `state/linear-seen/`, and stashes the full issue node to `state/linear-inbox/<issue-id>.json` for the later responder slice.
+Workflow states classify by configured name or fall back to the Linear state type, and a layered resolver (per-issue `repo:` label/field, then Project, then Team) maps a ticket to a `projects/<repo>` from `config/linear-projects.tsv`.
+Untrusted ticket and comment text never reaches a shell: classification reads JSON via `jq`, only the validated issue id and a safe event name reach the shell, and missing `curl`/`jq` or any auth/config/HTTP/GraphQL failure surfaces once as a rate-limited `linear-error`.
+The watcher, wake queue, arm wrapper, and afk daemon are unchanged; like X mode, Linear mode is layered on top through the existing check mechanism.
 
 ## Project memory belongs to projects
 

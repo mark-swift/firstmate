@@ -140,6 +140,7 @@ Otherwise it prints one line per problem or capability fact; handle each:
   This mirrors `/updatefirstmate`'s `nudge-secondmates:` report: it is a gentle steer, never an interruption, and the fast-forward already landed safely.
   A secondmate that was skipped, already current, or whose advance changed no instructions is not listed and must not be disturbed.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts; follow section 14 for watcher cadence restart only when a running watcher needs the transition applied immediately.
+- `LINEARMODE: Linear mode on ...` / `LINEARMODE: Linear mode off ...` - bootstrap confirmed or removed the local Linear-mode poll artifacts (an `off` line may instead report missing `curl`/`jq` dependencies); follow section 15 for watcher cadence restart only when a running watcher needs the transition applied immediately.
 
 Bootstrap's fleet refresh is bounded by `FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT` seconds, default 20; a timeout is reported as a `FLEET_SYNC` skip and does not block startup.
 

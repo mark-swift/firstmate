@@ -52,7 +52,7 @@ Launch mechanics, including the verified command templates, live in [`bin/fm-spa
 ## Toolchain
 
 On first launch the first mate detects what its required toolchain is missing or too old (tmux, node, gh, treehouse with durable lease support, no-mistakes v1.31.2 or newer, gh-axi, chrome-devtools-axi, lavish-axi), lists it with the exact install commands, and installs only after you say go.
-When X mode is opted in, bootstrap also requires `curl` and `jq` before arming the relay poll shim.
+When X mode or Linear mode is opted in, bootstrap also requires `curl` and `jq` before arming that mode's poll shim.
 If compatible `tasks-axi` is already on `PATH`, bootstrap records it as an optional capability fact and firstmate uses its verbs for routine backlog mutations; when it is absent or incompatible, firstmate keeps hand-editing `data/backlog.md` exactly as before.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 Bootstrap also runs a best-effort project clone refresh through `fm-fleet-sync.sh`.
@@ -101,6 +101,28 @@ In dry-run, `fm-x-dismiss.sh` records `{request_id, endpoint:"dismiss"}` to the 
 The live answer, follow-up, and dismiss bodies intentionally stay the same shape; the relay distinguishes them by endpoint.
 These paths need `jq` to build the JSON payload, but they run before token and network checks, so they need neither `FMX_PAIRING_TOKEN` nor `curl`.
 
+## Linear mode (.env)
+
+Linear mode lets a firstmate instance use Linear as a work source: the captain assigns ready, bot-owned tickets and firstmate ships them through no-mistakes as PRs.
+This documents slice 1 only - the inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes; the responder skill and active ship/review lifecycle land in a later slice.
+It is off unless the firstmate home's gitignored `.env` contains a non-empty `LINEAR_API_KEY`.
+That key is the activation gate and the only strictly required value.
+`LINEAR_API_URL` is optional and defaults to `https://api.linear.app/graphql`; `LINEAR_BOT_USER_ID` is the bot's Linear user id and is required for the poll to scope tickets to the bot.
+A Linear personal API key authenticates with the **raw** key value in the `Authorization` header (no `Bearer` prefix), written to a `0600` temp file.
+The state-name mapping (`LINEAR_STATE_READY`, `LINEAR_STATE_BACKLOG`, `LINEAR_STATE_CANCELED`) is optional: a configured non-empty name matches case-insensitively, while an unset role falls back to the Linear workflow-state type (`unstarted` -> ready, `backlog` -> backlog, `canceled` -> canceled).
+For every key an explicit environment variable wins over the `.env` file; `LINEAR_ENV_FILE` can point direct client invocations at another `.env`-style file, but bootstrap activation still keys off `$FM_HOME/.env` presence.
+
+Bootstrap turns the key into local generated state.
+It writes `state/linear-watch.check.sh`, a check shim that runs `bin/fm-linear-poll.sh`, and `config/linear.env`, which exports `FM_CHECK_INTERVAL=60` for watcher arms in that home.
+When the key is removed or empty, the next bootstrap removes those artifacts; steady-state off is silent and writes nothing.
+
+`bin/fm-linear-poll.sh` does one bounded GraphQL poll of the tickets assigned to `LINEAR_BOT_USER_ID`.
+For each bot-assigned ticket it emits at most one wake per genuine transition, deduped via per-issue seen-markers under `state/linear-seen/`, and atomically stashes the full issue node (plus an `event` field) to `state/linear-inbox/<issue-id>.json` for the responder skill to drain in a later slice.
+`linear-ready <issue-id>` fires on first sight of a ready bot-assigned ticket; `linear-canceled <issue-id>` fires only on a witnessed transition to canceled; `linear-groom <issue-id>` fires on a new non-bot comment on a bot-assigned backlog item, with the first sighting recording the marker silently so a fresh home does not flood on history.
+Auth, config, HTTP, or GraphQL failures, and missing `curl`/`jq`, are reported once as `linear-error ...` (deduped via `state/linear-poll.error`) without echoing the untrusted server message.
+Which `projects/<repo>` a ticket maps to is resolved with layered precedence (a per-issue `repo:` label or Repository field, then the Linear Project, then the Team, else unresolved) from `config/linear-projects.tsv`, tab-separated `<project-id-or-name|team-id-or-key-or-name>\t<projects/repo>` lines with `#` comments ignored; `LINEAR_PROJECTS_MAP` overrides the map path.
+The resolver and meta-link helpers (`linear_issue=`/`linear_branch=`) ship now but are consumed by the active lifecycle in the next slice.
+
 ## Environment variables
 
 Runtime tuning via environment variables (defaults shown):
@@ -115,7 +137,7 @@ FM_CONFIG_OVERRIDE=      # alternate config dir, mainly for tests
 FM_POLL=15              # seconds between watcher poll cycles
 FM_HEARTBEAT=600        # base seconds between heartbeat scans; no-change heartbeats are absorbed while idle
 FM_HEARTBEAT_MAX=7200   # heartbeat backoff cap
-FM_CHECK_INTERVAL=300   # seconds between slow checks (merge polls or the X-mode poll shim)
+FM_CHECK_INTERVAL=300   # seconds between slow checks (merge polls or the X-mode/Linear-mode poll shims)
 FM_CHECK_TIMEOUT=30     # seconds allowed per slow check script
 FM_CREW_STATE_NM_TIMEOUT=10   # seconds allowed per no-mistakes query inside fm-crew-state.sh
 FMX_PAIRING_TOKEN=      # X mode pairing token; .env opt-in authorizes replies and eligible lifecycle actions
@@ -125,6 +147,14 @@ FMX_DRY_RUN=            # truthy previews X replies and dismissals to state/x-ou
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-tweet split budget; values below 50 clamp to 50
 FMX_X_THREAD_MAX=25     # maximum tweets in one auto-split X reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=86400   # local window for posting one X completion follow-up
+LINEAR_API_KEY=         # Linear mode activation gate; .env opt-in arms the bot-assigned-ticket poll (raw key, no Bearer prefix)
+LINEAR_API_URL=https://api.linear.app/graphql   # optional Linear GraphQL endpoint override
+LINEAR_BOT_USER_ID=     # Linear user id of the firstmate bot; required for the poll to scope tickets to the bot
+LINEAR_STATE_READY=     # optional ready-state name; unset falls back to the unstarted workflow-state type
+LINEAR_STATE_BACKLOG=   # optional backlog-state name; unset falls back to the backlog workflow-state type
+LINEAR_STATE_CANCELED=  # optional canceled-state name; unset falls back to the canceled workflow-state type
+LINEAR_ENV_FILE=        # optional alternate .env file for direct Linear client invocations; bootstrap still checks $FM_HOME/.env
+LINEAR_PROJECTS_MAP=    # optional override path for the project/team -> repo map (default config/linear-projects.tsv)
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
 FM_GUARD_GRACE=300      # seconds before guard warnings and arm health checks treat a watcher beacon as stale
 FM_ARM_CONFIRM_TIMEOUT=10   # seconds fm-watch-arm waits to confirm a fresh watcher before reporting FAILED
