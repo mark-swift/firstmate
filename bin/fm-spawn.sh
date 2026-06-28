@@ -332,18 +332,23 @@ if [ "$KIND" = secondmate ]; then
     BRIEF="$DATA/$ID/brief.md"
   fi
 else
-  PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
+  # Use pwd -P to resolve symlinks so the path matches tmux's pane_current_path
+  # (which reports physical paths), avoiding false isolation-check failures when
+  # the firstmate home is reached through a symlink.
+  PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd -P)"
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
 
 # Same session when firstmate already runs inside tmux; dedicated session otherwise.
+# Use session ID instead of session name to avoid ambiguity with numeric names
+# (e.g., a session named "0" would be misread as window index 0 with a bare "-t 0").
 if [ -n "${TMUX:-}" ]; then
-  SES=$(tmux display-message -p '#S')
+  SES=$(tmux display-message -p '#{session_id}')
 else
   tmux has-session -t firstmate 2>/dev/null || tmux new-session -d -s firstmate
-  SES=firstmate
+  SES=$(tmux display-message -p -t firstmate '#{session_id}')
 fi
 
 W="fm-$ID"
