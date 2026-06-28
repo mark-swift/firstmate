@@ -70,9 +70,11 @@ README.md            public overview and development notes
 .agents/skills/      shared skills, committed
 .claude/skills       symlink to .agents/skills for claude compatibility
 bin/                 helper scripts, committed; read each script's header before first use
-.env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
+.env                 optional X-mode pairing token (section 14) and/or Linear API key (section 15); LOCAL, gitignored; presence-gates each mode
 config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" = same as firstmate
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
+config/linear.env    generated Linear-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present (section 15)
+config/linear-projects.tsv  captain's Linear project/team -> projects/repo map; LOCAL, gitignored; read by the project resolver (section 15)
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         captain's curated personal preferences and working style; LOCAL, gitignored, and canonical even if harness memory mirrors it
@@ -90,6 +92,10 @@ state/               volatile runtime signals; gitignored
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error       generated X-mode relay diagnostic dedupe marker
+  linear-watch.check.sh  generated Linear-mode poll shim; present only when opted in (section 15)
+  linear-inbox/      generated Linear-mode bot-assigned ticket payloads, keyed by issue id; drained by the responder skill in a later slice (section 15)
+  linear-seen/       generated Linear-mode per-issue seen markers (<id>.state, <id>.comment) so each event wakes once (section 15)
+  linear-poll.error  generated Linear-mode diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
@@ -134,6 +140,7 @@ Otherwise it prints one line per problem or capability fact; handle each:
   This mirrors `/updatefirstmate`'s `nudge-secondmates:` report: it is a gentle steer, never an interruption, and the fast-forward already landed safely.
   A secondmate that was skipped, already current, or whose advance changed no instructions is not listed and must not be disturbed.
 - `FMX: X mode on ...` / `FMX: X mode off ...` - bootstrap confirmed or removed the local X-mode poll artifacts; follow section 14 for watcher cadence restart only when a running watcher needs the transition applied immediately.
+- `LINEARMODE: Linear mode on ...` / `LINEARMODE: Linear mode off ...` - bootstrap confirmed or removed the local Linear-mode poll artifacts (an `off` line may instead report missing `curl`/`jq` dependencies); follow section 15 for watcher cadence restart only when a running watcher needs the transition applied immediately.
 
 Bootstrap's fleet refresh is bounded by `FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT` seconds, default 20; a timeout is reported as a `FLEET_SYNC` skip and does not block startup.
 
@@ -747,3 +754,64 @@ Truthy means anything except unset, empty, `0`, `false`, `no`, or `off`; an expl
 These dry-run paths run before token and network checks, so previewing a composed answer or dismiss needs `jq` but does not need `FMX_PAIRING_TOKEN`, `curl`, or a live relay.
 Polling and composing are unchanged, so the full poll -> wake -> compose -> would-post loop runs end to end without a public tweet - the mode for safe end-to-end testing.
 Inspect `state/x-outbox/` to see exactly what would have gone out.
+
+## 15. Linear mode
+
+Linear mode lets a firstmate instance use Linear as a work source: the captain grooms tickets in the backlog, assigns ready ones to a dedicated firstmate bot user, and firstmate ships them through no-mistakes as PRs the captain reviews and merges.
+Linear's surface is deliberately narrow - grooming candidates in the backlog and the review gate on the linked PR; all in-progress questions and decisions happen off Linear (through firstmate and Lavish), and review feedback comes from the PR itself.
+Assignment to the bot user is the single ownership signal: firstmate only ever touches bot-assigned tickets.
+Like X mode, Linear mode ships inside this repo for every user but is **inert until opted in**, so a user who never enables it sees zero behavior change.
+
+**This section documents slice 1 only: the inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes.**
+The responder skill and the active lifecycle (classifying a wake, dispatching a ship task, attaching the review gate, posting completion back to Linear) land in a later slice.
+
+**Activation is `.env` presence, not a command.**
+Put one value, `LINEAR_API_KEY`, into the `.env` file at this home's root (`.env` is gitignored).
+That key is the activation gate and the only strictly required config.
+A Linear personal API key authenticates with the **raw** key value in the `Authorization` header (no `Bearer` prefix).
+Other keys are optional: `LINEAR_API_URL` defaults to `https://api.linear.app/graphql`; `LINEAR_BOT_USER_ID` is the bot's Linear user id and is required for the poll to scope tickets to the bot; and the state-name mapping (`LINEAR_STATE_READY`, `LINEAR_STATE_BACKLOG`, `LINEAR_STATE_CANCELED`) is optional.
+For every key an explicit environment variable wins over the `.env` file.
+
+**State mapping.**
+Each `LINEAR_STATE_*` value names the workspace's state for that role.
+A configured (non-empty) name is matched case-insensitively; when a role's name is not configured, classification falls back to the Linear workflow-state **type** (`unstarted` -> ready, `backlog` -> backlog, `canceled` -> canceled).
+So a default workspace needs no state config, and a workspace with custom state names sets only the ones that differ.
+
+**Project -> repo resolution.**
+Which `projects/<repo>` a ticket maps to is resolved with layered precedence: a per-issue `repo:<name>` label or "Repository" field wins; else the Linear **Project** (primary); else the **Team**; else unresolved.
+Project/team mappings live in `config/linear-projects.tsv` (gitignored), tab-separated lines `<linear-project-id-or-name|team-id-or-key-or-name>\t<projects/repo>`, with `#` comments and blank lines ignored.
+The resolver ships and is unit-tested in this slice; it is consumed by the active lifecycle in the next.
+
+**Mechanism (purely additive; the watcher backbone is untouched).**
+On the next bootstrap, an `.env` with a non-empty `LINEAR_API_KEY` makes bootstrap drop two gitignored, idempotent artifacts: `state/linear-watch.check.sh`, a check shim that execs `bin/fm-linear-poll.sh`, and `config/linear.env`, which exports `FM_CHECK_INTERVAL=60`.
+The shim rides the existing `state/*.check.sh` mechanism (section 8): each check cycle `bin/fm-linear-poll.sh` does one short, bounded GraphQL poll of the tickets assigned to the bot user.
+For each bot-assigned ticket it emits at most one watcher wake per genuine transition (deduped via per-issue seen-markers under `state/linear-seen/`), and atomically stashes the full issue node (plus an `event` field) to `state/linear-inbox/<issue-id>.json` for the responder skill to drain later:
+
+- `linear-ready <issue-id>` - a ready-state ticket assigned to the bot (the go-work signal). This fires on first sight, because assignment of a ready ticket *is* the event.
+- `linear-canceled <issue-id>` - a watched bot-assigned ticket newly moved to canceled (drop it). This fires only on a transition firstmate witnessed, never on first sight of an already-canceled ticket.
+- `linear-groom <issue-id>` - a new non-bot comment on a bot-assigned backlog item (a grooming candidate). The first sighting records the comment marker silently; only comments newer than the marker groom, so a fresh home never floods on pre-existing history.
+- `linear-error <msg>` - one rate-limited diagnostic (deduped via `state/linear-poll.error`) for an auth, config, HTTP, or GraphQL failure; the untrusted server message is never echoed into the wake line.
+
+Missing local poll dependencies (`curl`, `jq`) print one rate-limited `linear-error` and exit 0, never blocking the watcher.
+All ticket and comment text is treated as untrusted: classification reads JSON via `jq`, only the validated issue id and the safe event name reach the shell, and nodes are stashed straight from `jq`, so public text never reaches a shell command.
+On opt-out (the key removed or emptied) the next bootstrap deletes both generated artifacts so the instance reverts to the default 300s, no-poll behavior.
+This layer stays additive to the watcher backbone: **no** edit is made to `bin/fm-watch.sh`, `bin/fm-watch-arm.sh`, `bin/fm-wake-lib.sh`, or the afk daemon.
+Linear mode lives in Linear-specific `bin/` scripts (`bin/fm-linear-lib.sh`, `bin/fm-linear-poll.sh`), the generated local artifacts, and `state/<id>.meta` link helpers (`linear_issue=`/`linear_branch=`) that the next slice consumes.
+
+**Cadence.**
+A Linear instance polls every 60s instead of the default 300s.
+To get that, arm the watcher with the Linear cadence sourced, exactly as section 8 describes but prefixed:
+
+```sh
+[ -f config/linear.env ] && . config/linear.env
+bin/fm-watch-arm.sh        # as the harness's tracked background task
+```
+
+Because `bin/fm-watch.sh` reads `FM_CHECK_INTERVAL` only at process start and the arm no-ops on an already-healthy watcher, a cadence **transition** (opt-in while a watcher is already running, or opt-out) is applied by restarting the home-scoped watcher with the new environment: `[ -f config/linear.env ] && . config/linear.env; bin/fm-watch-arm.sh --restart` (omit the source on opt-out so the 300s default returns), run as the harness's tracked background task.
+Bootstrap deliberately does not restart the watcher itself.
+Linear mode is also a reason to keep the watcher armed even with no fleet work, so a Linear-only user is still served.
+
+**On a wake (slice 1).**
+A `linear-ready`/`linear-canceled`/`linear-groom` `check:` wake means a bot-assigned ticket needs attention; for now, read the stashed `state/linear-inbox/<issue-id>.json` and handle it through firstmate's normal intake and lifecycle by hand.
+A `linear-error ...` wake is an X-style configuration blocker: report it and fix the `.env`/dependency.
+The dedicated responder skill that automates classification and dispatch arrives in the next slice.

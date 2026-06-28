@@ -47,6 +47,7 @@ This is.. a directory that turns any agent into your firstmate, and you the capt
 - **Optional secondmates** - opt in to persistent domain supervisors that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, kept on the primary firstmate version by guarded local fast-forwards.
 - **Event-driven, zero-token supervision** - a bash watcher sleeps on the fleet and wakes the first mate only when something needs you.
 - **Optional X mode** - opt in with one local `.env` token so firstmate can answer your public `@myfirstmate` mentions, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post one public-safe completion follow-up without changing non-X behavior; dry-run preview records would-be replies and dismissals locally before go-live.
+- **Optional Linear mode** - opt in with one local `.env` key (`LINEAR_API_KEY`) so firstmate polls Linear for tickets assigned to its bot user and surfaces them as watcher events (a ready ticket, a canceled ticket, a new grooming comment); a user who never configures it sees zero behavior change. This slice ships only the connectivity and polling plumbing - the responder skill and active lifecycle that classify those events, dispatch ship tasks, and post back to Linear land in a later slice.
 - **Guarded by construction** - the first mate is read-only over your projects outside guarded clone refreshes, safe branch pruning, and approved `local-only` fast-forward merges; crewmates make every project change behind your merge approval.
 - **Restart-proof** - all state lives on disk and in tmux; kill the session anytime and the next one reconciles and carries on.
 
@@ -119,9 +120,11 @@ Requests that finish immediately get one public-safe outcome reply.
 Requests that spawn longer-running work get an acknowledgement first, a task link in local state, and one completion follow-up within the relay's 24h window when that task lands, reports, or fails.
 It preserves parent-tweet context for conversational replies and dismisses pure acknowledgments at the relay without posting.
 Long replies stay text-only: the reply client splits them into bounded numbered threads when needed.
+An opt-in Linear mode can likewise use the watcher check path to poll Linear for tickets assigned to its bot user, surfacing a ready ticket, a newly canceled ticket, or a new grooming comment on a backlog item as a watcher event.
+This slice ships only that connectivity and polling plumbing; the responder skill and active lifecycle that classify those events, dispatch ship tasks, and post results back to Linear arrive in a later slice, so configuring it never auto-works Linear tickets end to end yet.
 When firstmate works on itself, spawn-time isolation checks and a primary-checkout tangle alarm keep the operating checkout on its default branch and stop a crewmate that did not land in a separate worktree.
 
-Full architecture - the supervision engine, worktree isolation, secondmates, project modes, optional X mode, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
+Full architecture - the supervision engine, worktree isolation, secondmates, project modes, optional X mode, optional Linear mode, fleet sync, and self-update - is in [docs/architecture.md](docs/architecture.md).
 
 ## Built-in skills
 
@@ -138,7 +141,7 @@ Agent-only reference skills live under `.agents/skills/` and are loaded by first
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) - how the crew, supervision, worktrees, secondmates, and project modes work.
-- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, optional X mode, the files you set, and harness support.
+- [docs/configuration.md](docs/configuration.md) - environment variables, `FM_HOME`, optional X mode, optional Linear mode, the files you set, and harness support.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - firstmate's full operating manual for the orchestrator agent.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.

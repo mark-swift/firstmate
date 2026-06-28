@@ -5,7 +5,7 @@ Each file also starts with a short header comment.
 
 | Script                   | Description                                                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `fm-bootstrap.sh`        | Detect required toolchain and version problems, optional capability facts, primary-checkout `TANGLE:` problems, and actionable clone refresh outcomes; refresh project clones best-effort; locally sync live secondmate homes; set up opt-in X mode; install tools only after consent |
+| `fm-bootstrap.sh`        | Detect required toolchain and version problems, optional capability facts, primary-checkout `TANGLE:` problems, and actionable clone refresh outcomes; refresh project clones best-effort; locally sync live secondmate homes; set up opt-in X mode and Linear mode; install tools only after consent |
 | `fm-fleet-sync.sh`       | Fetch clones, fast-forward safe default-branch states, self-heal clean detached ancestor drift, report unsafe drift as `STUCK:`, and safely prune branches whose remote is gone |
 | `fm-update.sh`           | Self-update the running firstmate repo and registered secondmate homes with fast-forward-only pulls from origin     |
 | `fm-backlog-handoff.sh`  | Move already-judged in-scope queued backlog items from the main home into a seeded secondmate home                 |
@@ -42,3 +42,5 @@ Each file also starts with a short header comment.
 | `fm-x-dismiss.sh`        | Dismiss or dry-run preview a skipped X mention without replying by sending `{request_id}` to the relay's `connector/dismiss` endpoint |
 | `fm-x-link.sh`           | Link a spawned task to its originating X mention by recording `x_request=` and `x_request_ts=` in `state/<id>.meta` |
 | `fm-x-followup.sh`       | Detect, post, and clear the single completion follow-up for an X-linked task, enforcing the local 24h window and retrying only when the relay post fails |
+| `fm-linear-lib.sh`       | Shared Linear-mode `.env`, alternate env-file, raw-key auth, GraphQL, state name/type classification, project/team -> repo resolver, and task-to-issue meta-link helpers |
+| `fm-linear-poll.sh`      | Do one bounded Linear GraphQL poll of bot-assigned tickets; without `LINEAR_API_KEY` it is a silent no-op, otherwise it stashes each ticket node and prints `linear-ready`/`linear-canceled`/`linear-groom <issue-id>` wakes with per-issue seen-marker dedupe |

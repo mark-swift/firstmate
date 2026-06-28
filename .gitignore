@@ -7,3 +7,5 @@ data/
 .env
 config/crew-harness
 config/x-mode.env
+config/linear.env
+config/linear-projects.tsv
