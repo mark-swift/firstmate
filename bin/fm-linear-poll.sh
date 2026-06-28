@@ -70,9 +70,10 @@ command -v jq   >/dev/null 2>&1 || { emit_error_once "missing jq"; exit 0; }
 BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-linear-poll.XXXXXX") || exit 0
 trap 'rm -f "$BODY_FILE"' EXIT
 
-# issues(first: 50) is an intentional slice-1 bound; a fleet with >50 bot-assigned
-# tickets would miss the overflow. comments are fetched newest-first so a busy
-# ticket's latest comment is always within the page that grooming keys off.
+# issues(first: 50) and comments(first: 50) are intentional slice-1 bounds; a
+# fleet with >50 bot-assigned tickets, or a ticket with >50 comments, would miss
+# the overflow. Linear orders comments by createdAt by default, so the newest
+# comment grooming keys off is within the fetched page for any normal ticket.
 read -r -d '' QUERY <<'GQL' || true
 query FmLinearPoll($bot: ID) {
   issues(first: 50, filter: { assignee: { id: { eq: $bot } } }) {
@@ -84,7 +85,7 @@ query FmLinearPoll($bot: ID) {
       team { id key name }
       project { id name }
       labels { nodes { name } }
-      comments(first: 50, orderBy: { createdAt: DESC }) { nodes { id createdAt user { id } } }
+      comments(first: 50) { nodes { id createdAt user { id } } }
     }
   }
 }

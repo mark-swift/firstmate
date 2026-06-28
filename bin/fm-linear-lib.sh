@@ -97,17 +97,17 @@ linear_load_config() {
 
 # linear_state_kind <state-name> <state-type> -> ready|backlog|canceled|other.
 # Single source of truth for slice-1 state classification, shared by the poll and
-# the unit tests. A configured state NAME wins (case-insensitive match against the
-# resolved LINEAR_STATE_* name); when a kind was not explicitly configured, the
-# Linear workflow-state TYPE is the fallback (unstarted->ready, backlog->backlog,
-# canceled->canceled). Requires linear_load_config to have run.
+# the unit tests. A CONFIGURED state NAME wins (case-insensitive match against the
+# configured LINEAR_STATE_* name); an UNCONFIGURED role never matches by name and
+# is classified solely by the Linear workflow-state TYPE (unstarted->ready,
+# backlog->backlog, canceled->canceled). Requires linear_load_config to have run.
 linear_state_kind() {
   local name=$1 type=$2 ln lt
   ln=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
   lt=$(printf '%s' "$type" | tr '[:upper:]' '[:lower:]')
-  if [ "$ln" = "$LINEAR_READY_NAME" ]; then echo ready; return; fi
-  if [ "$ln" = "$LINEAR_BACKLOG_NAME" ]; then echo backlog; return; fi
-  if [ "$ln" = "$LINEAR_CANCELED_NAME" ]; then echo canceled; return; fi
+  if [ "$LINEAR_READY_SET" = 1 ] && [ "$ln" = "$LINEAR_READY_NAME" ]; then echo ready; return; fi
+  if [ "$LINEAR_BACKLOG_SET" = 1 ] && [ "$ln" = "$LINEAR_BACKLOG_NAME" ]; then echo backlog; return; fi
+  if [ "$LINEAR_CANCELED_SET" = 1 ] && [ "$ln" = "$LINEAR_CANCELED_NAME" ]; then echo canceled; return; fi
   if [ "$LINEAR_READY_SET" = 0 ] && [ "$lt" = unstarted ]; then echo ready; return; fi
   if [ "$LINEAR_BACKLOG_SET" = 0 ] && [ "$lt" = backlog ]; then echo backlog; return; fi
   if [ "$LINEAR_CANCELED_SET" = 0 ] && [ "$lt" = canceled ]; then echo canceled; return; fi

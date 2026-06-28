@@ -407,6 +407,13 @@ test_lib_state_name_then_type_fallback() {
       "$(linear_state_kind "In Progress" started)"')
   [ "$out" = "ready backlog canceled other" ] \
     || fail "type fallback must map unstarted/backlog/canceled (got: $out)"
+  # An unconfigured role never matches by name: a state literally named "Backlog"
+  # but typed "unstarted" classifies as ready via TYPE, not backlog via name.
+  out=$(FM_HOME="$TMP_ROOT" bash -c '
+    . "'"$ROOT"'/bin/fm-linear-lib.sh"; linear_load_config
+    linear_state_kind Backlog unstarted')
+  [ "$out" = "ready" ] \
+    || fail "unconfigured role must classify by type, not default name (got: $out)"
   # A configured READY name matches by name and disables the type fallback.
   out=$(FM_HOME="$TMP_ROOT" LINEAR_STATE_READY=Groomed bash -c '
     . "'"$ROOT"'/bin/fm-linear-lib.sh"; linear_load_config
