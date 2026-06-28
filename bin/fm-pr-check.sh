@@ -3,8 +3,24 @@
 # state/<id>.meta when available, then arms the watcher's merge poll by writing
 # state/<id>.check.sh, which prints one line iff the PR is merged (the watcher's
 # check contract: output = wake firstmate, silence = keep sleeping).
+#
+# The check shim also surfaces PR REVIEW FEEDBACK as a distinct wake: a new
+# changes-requested or review-comment review (since the last seen one) prints
+# "pr-feedback <id>", tracked with a per-task seen-cursor (state/<id>.pr-feedback-seen)
+# so it wakes once per new review and never re-fires on the same one. This is
+# strictly additive to merge detection - a merged PR still wakes "merged" and the
+# feedback path is skipped - and it drives the Linear In Review -> In Progress
+# feedback loop (AGENTS.md "Linear mode"). To avoid a spurious wake on review
+# activity that predates arming, the cursor is baselined to the current newest
+# interesting review at arm time (only when no cursor exists yet).
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
+
+# The jq selector for "interesting" reviews (changes-requested or a review
+# comment), shared by the arm-time baseline and the generated shim so they stay
+# in lockstep. APPROVED reviews are intentionally excluded: an approval is not
+# feedback that needs another iteration.
+FM_PR_FEEDBACK_JQ='[.reviews[]? | select(.state=="CHANGES_REQUESTED" or .state=="COMMENTED") | .submittedAt] | max // ""'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -37,8 +53,30 @@ if [ -f "$META" ]; then
   fi
 fi
 
+SEEN="$STATE/$ID.pr-feedback-seen"
+# Baseline the feedback cursor once, so review activity that predates arming does
+# not wake firstmate. Only when no cursor exists yet (preserve it across re-arms).
+if [ ! -f "$SEEN" ]; then
+  mkdir -p "$STATE" 2>/dev/null || true
+  base=""
+  if command -v gh >/dev/null 2>&1; then
+    base=$(gh pr view "$URL" --json reviews -q "$FM_PR_FEEDBACK_JQ" 2>/dev/null || true)
+  fi
+  printf '%s' "$base" > "$SEEN" 2>/dev/null || true
+fi
+
 cat > "$STATE/$ID.check.sh" <<EOF
 state=\$(gh pr view "$URL" --json state -q .state 2>/dev/null)
-[ "\$state" = "MERGED" ] && echo "merged"
+if [ "\$state" = "MERGED" ]; then
+  echo "merged"
+else
+  # PR review feedback: wake once per new changes-requested / review-comment.
+  prev=\$(cat "$SEEN" 2>/dev/null || true)
+  latest=\$(gh pr view "$URL" --json reviews -q '$FM_PR_FEEDBACK_JQ' 2>/dev/null || true)
+  if [ -n "\$latest" ] && [ "\$latest" != "\$prev" ]; then
+    printf '%s' "\$latest" > "$SEEN" 2>/dev/null || true
+    echo "pr-feedback $ID"
+  fi
+fi
 EOF
 echo "armed: state/$ID.check.sh polls $URL"

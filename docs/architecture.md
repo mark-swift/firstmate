@@ -108,14 +108,15 @@ The watcher, wake queue, arm wrapper, and afk daemon are unchanged; X mode is la
 ## Optional Linear mode
 
 Linear mode is opt-in use of Linear as a work source: the captain assigns ready, bot-owned tickets and firstmate ships them through no-mistakes as PRs the captain reviews and merges.
-This slice ships only the inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes; the responder skill and the active ship/review lifecycle land in a later slice.
+It ships inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes, plus the active ship/review lifecycle that acts on them; ticket ideation (firstmate filing new tickets) lands in a later slice.
 A user enables it by putting `LINEAR_API_KEY` in the firstmate home's gitignored `.env`; the raw key authenticates Linear's GraphQL API with no `Bearer` prefix, and assignment to the bot user (`LINEAR_BOT_USER_ID`) is the single ownership signal.
 On bootstrap, that key creates two local artifacts: `state/linear-watch.check.sh`, which performs one bounded GraphQL poll through `bin/fm-linear-poll.sh`, and `config/linear.env`, which sets `FM_CHECK_INTERVAL=60` for watcher arms in that home.
 Without the key, bootstrap removes those artifacts on opt-out and otherwise stays silent, so non-Linear users see no behavior change.
-For each bot-assigned ticket the poll emits at most one wake per genuine transition - `linear-ready`, `linear-canceled`, or `linear-groom <issue-id>` - deduped via per-issue seen-markers under `state/linear-seen/`, and stashes the full issue node to `state/linear-inbox/<issue-id>.json` for the later responder slice.
+For each bot-assigned ticket the poll emits at most one wake per genuine transition - `linear-ready`, `linear-canceled`, or `linear-groom <issue-id>` - deduped via per-issue seen-markers under `state/linear-seen/`, and stashes the full issue node to `state/linear-inbox/<issue-id>.json` for the `linear-respond` skill to drain.
 Workflow states classify by configured name or fall back to the Linear state type, and a layered resolver (per-issue `repo:` label/field, then Project, then Team) maps a ticket to a `projects/<repo>` from `config/linear-projects.tsv`.
 Untrusted ticket and comment text never reaches a shell: classification reads JSON via `jq`, only the validated issue id and a safe event name reach the shell, and missing `curl`/`jq` or any auth/config/HTTP/GraphQL failure surfaces once as a rate-limited `linear-error`.
-The watcher, wake queue, arm wrapper, and afk daemon are unchanged; like X mode, Linear mode is layered on top through the existing check mechanism.
+On a wake firstmate loads the `linear-respond` skill: it risk-gates each ready ticket (`bin/fm-linear-risk.sh` - any hard-stop or uncertainty holds, throttled by a per-repo in-flight cap), and on a GO dispatches a ship crewmate on the ticket's exact Linear `branchName` (via the `bin/fm-brief.sh --linear-branch` scaffold) so the PR auto-links, moves the ticket through In Progress and In Review with `bin/fm-linear-move.sh`, links the task with `bin/fm-linear-link.sh`, grooms Backlog comments with `bin/fm-linear-comment.sh`, and loops back to In Progress on a `pr-feedback` review wake from the extended `bin/fm-pr-check.sh`; in-progress questions go through firstmate, never Linear comments.
+The watcher, wake queue, arm wrapper, and afk daemon are unchanged; like X mode, Linear mode is layered on top through the existing check mechanism (the PR-feedback poll is an additive extension of the per-task `fm-pr-check.sh` shim, not the watcher core).
 
 ## Project memory belongs to projects
 

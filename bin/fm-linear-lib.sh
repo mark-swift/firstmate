@@ -93,6 +93,51 @@ linear_load_config() {
   if [ -n "${LINEAR_STATE_CANCELED+x}" ]; then raw=${LINEAR_STATE_CANCELED-}; else raw=$(linear_env_get LINEAR_STATE_CANCELED "$env_file"); fi
   if [ -n "$raw" ]; then LINEAR_CANCELED_SET=1; else LINEAR_CANCELED_SET=0; raw=Canceled; fi
   LINEAR_CANCELED_NAME=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+
+  # The two states firstmate TRANSITIONS tickets into during the active lifecycle:
+  # In Progress (on dispatch and on PR feedback) and In Review (after the gate is
+  # green). Unlike the poll's read-side roles above, these are matched by NAME
+  # primarily - Linear has no distinct workflow-state TYPE for "review" (both In
+  # Progress and In Review are typed "started"), so a name is the only way to tell
+  # them apart. The default names are Linear's own defaults, so a default workspace
+  # needs no config; a renamed workspace sets LINEAR_STATE_IN_PROGRESS /
+  # LINEAR_STATE_IN_REVIEW. _SET records whether the name was configured: for
+  # in-progress it gates the started-type fallback (so a custom-named in-progress
+  # state still resolves); in-review has no type fallback at all.
+  if [ -n "${LINEAR_STATE_IN_PROGRESS+x}" ]; then raw=${LINEAR_STATE_IN_PROGRESS-}; else raw=$(linear_env_get LINEAR_STATE_IN_PROGRESS "$env_file"); fi
+  if [ -n "$raw" ]; then LINEAR_INPROGRESS_SET=1; else LINEAR_INPROGRESS_SET=0; raw="In Progress"; fi
+  LINEAR_INPROGRESS_NAME=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+
+  if [ -n "${LINEAR_STATE_IN_REVIEW+x}" ]; then raw=${LINEAR_STATE_IN_REVIEW-}; else raw=$(linear_env_get LINEAR_STATE_IN_REVIEW "$env_file"); fi
+  if [ -n "$raw" ]; then LINEAR_INREVIEW_SET=1; else LINEAR_INREVIEW_SET=0; raw="In Review"; fi
+  LINEAR_INREVIEW_NAME=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+}
+
+# linear_match_state_id <role> <team-states-json> -> prints the workflow-state id
+# for the role, or nothing (and returns 1) when no state matches. <role> is
+# "in-progress" or "in-review"; <team-states-json> is a JSON array of the team's
+# workflow states, each {id,name,type}. A configured-or-default NAME match wins
+# (case-insensitive); for in-progress only, an unconfigured role falls back to the
+# first "started"-typed state. Requires linear_load_config to have run, and jq.
+linear_match_state_id() {
+  local role=$1 states=$2 name set typefb id
+  case "$role" in
+    in-progress) name=$LINEAR_INPROGRESS_NAME; set=$LINEAR_INPROGRESS_SET; typefb=started ;;
+    in-review)   name=$LINEAR_INREVIEW_NAME;   set=$LINEAR_INREVIEW_SET;   typefb= ;;
+    *) return 1 ;;
+  esac
+  # Primary: match the role's (configured or default) name, case-insensitively.
+  id=$(printf '%s' "$states" | jq -r --arg n "$name" \
+    '[ (. // [])[] | select((.name // "" | ascii_downcase) == $n) ] | (.[0].id // "")' 2>/dev/null) || id=
+  if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
+  # Fallback (in-progress only, and only when the name was not configured): the
+  # first state of the role's workflow TYPE. in-review has no type to fall back to.
+  if [ "$set" = 0 ] && [ -n "$typefb" ]; then
+    id=$(printf '%s' "$states" | jq -r --arg t "$typefb" \
+      '[ (. // [])[] | select((.type // "" | ascii_downcase) == $t) ] | (.[0].id // "")' 2>/dev/null) || id=
+    if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
+  fi
+  return 1
 }
 
 # linear_state_kind <state-name> <state-type> -> ready|backlog|canceled|other.
