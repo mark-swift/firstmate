@@ -73,6 +73,7 @@ tests/fm-bootstrap.test.sh                # bootstrap dependency and feature-pro
 tests/fm-fleet-sync.test.sh               # project clone refresh: safe detached recovery, STUCK drift reports, benign skips, and bootstrap relay
 tests/fm-x-mode.test.sh                   # X-mode poll, inbox context round-trip, reply threading, dismiss, dry-run preview, and .env-presence activation tests
 tests/fm-linear-mode.test.sh              # Linear-mode poll wakes (ready/canceled/groom), per-issue seen-marker dedupe, lib config precedence, raw-key 0600 auth header, state name->type fallback, project resolver layers, meta links, rate-limited errors, and .env-presence activation tests
+tests/fm-linear-active.test.sh            # Linear-mode active lifecycle: issue/comment/move/link helpers against a stubbed curl, the GO/HOLD risk rubric and repo-resolution wiring, the fm-pr-check.sh pr-feedback extension, and the --linear-branch brief scaffold
 tests/fm-tangle-guard.test.sh             # primary-checkout tangle detection and spawn/brief isolation tests
 tests/fm-spawn-batch.test.sh              # batch dispatch and FM_HOME project-path scoping tests
 tests/fm-update.test.sh                   # fast-forward-only self-update, reread, nudge, dedup, and skip-safety tests
