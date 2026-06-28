@@ -75,7 +75,7 @@ read -r -d '' STATES_Q <<'GQL' || true
 query FmLinearStates($id: String!) {
   issue(id: $id) {
     id
-    team { states { nodes { id name type } } }
+    team { states { nodes { id name type position } } }
   }
 }
 GQL

@@ -4,15 +4,20 @@
 # state/<id>.check.sh, which prints one line iff the PR is merged (the watcher's
 # check contract: output = wake firstmate, silence = keep sleeping).
 #
-# The check shim also surfaces PR REVIEW FEEDBACK as a distinct wake: a new
-# changes-requested or review-comment review (since the last seen one) prints
-# "pr-feedback <id>", tracked with a per-task seen-cursor (state/<id>.pr-feedback-seen)
-# so it wakes once per new review and never re-fires on the same one. This is
-# strictly additive to merge detection - a merged PR still wakes "merged" and the
-# feedback path is skipped - and it drives the Linear In Review -> In Progress
-# feedback loop (AGENTS.md "Linear mode"). To avoid a spurious wake on review
+# For LINEAR-LINKED tasks only (meta has a linear_issue= line, written by
+# fm-linear-link.sh), the check shim additionally surfaces PR REVIEW FEEDBACK as a
+# distinct wake: a new changes-requested or review-comment review (since the last
+# seen one) prints "pr-feedback <id>", tracked with a per-task seen-cursor
+# (state/<id>.pr-feedback-seen) so it wakes once per new review and never re-fires
+# on the same one. This is strictly additive to merge detection - a merged PR still
+# wakes "merged" and the feedback path is skipped - and it drives the Linear In
+# Review -> In Progress feedback loop (AGENTS.md "Linear mode"). Non-Linear tasks
+# (no-mistakes / direct-PR / X) get the merge-only shim, byte-for-byte unchanged:
+# no feedback wake, no cursor, no extra gh call. To avoid a spurious wake on review
 # activity that predates arming, the cursor is baselined to the current newest
-# interesting review at arm time (only when no cursor exists yet).
+# interesting review at arm time (only when no cursor exists yet, and only when the
+# arm-time gh call succeeds - a failed call leaves the cursor absent so the shim
+# baselines on its first run without waking, never on a transient gh blip).
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -53,30 +58,49 @@ if [ -f "$META" ]; then
   fi
 fi
 
-SEEN="$STATE/$ID.pr-feedback-seen"
-# Baseline the feedback cursor once, so review activity that predates arming does
-# not wake firstmate. Only when no cursor exists yet (preserve it across re-arms).
-if [ ! -f "$SEEN" ]; then
-  mkdir -p "$STATE" 2>/dev/null || true
-  base=""
-  if command -v gh >/dev/null 2>&1; then
-    base=$(gh pr view "$URL" --json reviews -q "$FM_PR_FEEDBACK_JQ" 2>/dev/null || true)
-  fi
-  printf '%s' "$base" > "$SEEN" 2>/dev/null || true
+# The pr-feedback wake is gated to Linear-linked tasks: only a task whose meta
+# carries a linear_issue= line (a Linear-driven ship) has a defined handler for it.
+LINKED=0
+if [ -f "$META" ] && grep -q '^linear_issue=' "$META"; then
+  LINKED=1
 fi
 
-cat > "$STATE/$ID.check.sh" <<EOF
+if [ "$LINKED" = 1 ]; then
+  SEEN="$STATE/$ID.pr-feedback-seen"
+  # Baseline the feedback cursor once, so review activity that predates arming does
+  # not wake firstmate. Only when no cursor exists yet (preserve it across re-arms),
+  # and only when the arm-time gh call SUCCEEDS - a transient gh failure leaves the
+  # cursor absent, so the shim baselines on its first run instead of false-waking.
+  if [ ! -f "$SEEN" ] && command -v gh >/dev/null 2>&1; then
+    mkdir -p "$STATE" 2>/dev/null || true
+    if base=$(gh pr view "$URL" --json reviews -q "$FM_PR_FEEDBACK_JQ" 2>/dev/null); then
+      printf '%s' "$base" > "$SEEN" 2>/dev/null || true
+    fi
+  fi
+
+  cat > "$STATE/$ID.check.sh" <<EOF
 state=\$(gh pr view "$URL" --json state -q .state 2>/dev/null)
 if [ "\$state" = "MERGED" ]; then
   echo "merged"
 else
   # PR review feedback: wake once per new changes-requested / review-comment.
-  prev=\$(cat "$SEEN" 2>/dev/null || true)
   latest=\$(gh pr view "$URL" --json reviews -q '$FM_PR_FEEDBACK_JQ' 2>/dev/null || true)
-  if [ -n "\$latest" ] && [ "\$latest" != "\$prev" ]; then
+  if [ ! -f "$SEEN" ]; then
+    # Arm-time gh call failed: establish the baseline now, without waking.
     printf '%s' "\$latest" > "$SEEN" 2>/dev/null || true
-    echo "pr-feedback $ID"
+  else
+    prev=\$(cat "$SEEN" 2>/dev/null || true)
+    if [ -n "\$latest" ] && [ "\$latest" != "\$prev" ]; then
+      printf '%s' "\$latest" > "$SEEN" 2>/dev/null || true
+      echo "pr-feedback $ID"
+    fi
   fi
 fi
 EOF
+else
+  cat > "$STATE/$ID.check.sh" <<EOF
+state=\$(gh pr view "$URL" --json state -q .state 2>/dev/null)
+[ "\$state" = "MERGED" ] && echo "merged"
+EOF
+fi
 echo "armed: state/$ID.check.sh polls $URL"

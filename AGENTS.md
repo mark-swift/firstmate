@@ -87,7 +87,7 @@ state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
   <id>.turn-ended    touched by turn-end hooks
   <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, kind=, mode=, yolo=; kind=secondmate also records home= and projects= (fm-pr-check appends pr= and verified pr_head= when available; fm-x-link appends x_request= and x_request_ts= for an X-mention-originated task, section 14; fm-linear-link appends linear_issue= and linear_branch= for a Linear-originated task, section 15)
-  <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check); fm-pr-check generates one that wakes "merged" and, additively, "pr-feedback <id>" on a new PR review (section 15)
+  <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check); fm-pr-check generates one that wakes "merged" and, additively for Linear-linked tasks only, "pr-feedback <id>" on a new PR review (section 15)
   <id>.pr-feedback-seen  generated PR-review feedback cursor for fm-pr-check; advances once per surfaced review (section 15)
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
@@ -838,6 +838,7 @@ All ticket and comment text is treated as untrusted: classification reads JSON v
 On opt-out (the key removed or emptied) the next bootstrap deletes both generated artifacts so the instance reverts to the default 300s, no-poll behavior.
 This layer stays additive to the watcher backbone: **no** edit is made to `bin/fm-watch.sh`, `bin/fm-watch-arm.sh`, `bin/fm-wake-lib.sh`, or the afk daemon.
 The PR-feedback poll is an additive extension of the per-task `bin/fm-pr-check.sh` (the watcher's check shim, not the watcher core): the merge poll still wakes `merged`, and a new changes-requested or review-comment review additionally wakes `pr-feedback <id>` once per new review (tracked by a per-task seen-cursor `state/<id>.pr-feedback-seen`, baselined at arm time so review activity predating arming stays silent).
+The `pr-feedback` arming is gated to Linear-linked tasks (the task's `state/<id>.meta` carries a `linear_issue=` line, written by `bin/fm-linear-link.sh`); a non-Linear task (no-mistakes / direct-PR / X) gets the merge-only shim unchanged - no feedback wake, no cursor, no extra gh call - because only the Linear lifecycle has a defined `pr-feedback` handler.
 Linear mode lives in Linear-specific `bin/` scripts (`bin/fm-linear-lib.sh`, `bin/fm-linear-poll.sh`, `bin/fm-linear-issue.sh`, `bin/fm-linear-comment.sh`, `bin/fm-linear-move.sh`, `bin/fm-linear-link.sh`, `bin/fm-linear-risk.sh`), the `linear-respond` skill, the `bin/fm-brief.sh --linear-branch` scaffold, the generated local artifacts, and the `state/<id>.meta` link helpers (`linear_issue=`/`linear_branch=`).
 
 **Cadence.**

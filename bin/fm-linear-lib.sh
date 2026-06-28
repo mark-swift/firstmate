@@ -131,10 +131,12 @@ linear_match_state_id() {
     '[ (. // [])[] | select((.name // "" | ascii_downcase) == $n) ] | (.[0].id // "")' 2>/dev/null) || id=
   if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
   # Fallback (in-progress only, and only when the name was not configured): the
-  # first state of the role's workflow TYPE. in-review has no type to fall back to.
+  # lowest-position state of the role's workflow TYPE. in-review has no type to fall
+  # back to. Sorting by workflow-state position (not API array order, which is
+  # unordered) keeps the pick deterministic across response orderings.
   if [ "$set" = 0 ] && [ -n "$typefb" ]; then
     id=$(printf '%s' "$states" | jq -r --arg t "$typefb" \
-      '[ (. // [])[] | select((.type // "" | ascii_downcase) == $t) ] | (.[0].id // "")' 2>/dev/null) || id=
+      '[ (. // [])[] | select((.type // "" | ascii_downcase) == $t) ] | sort_by(.position) | (.[0].id // "")' 2>/dev/null) || id=
     if [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
   fi
   return 1

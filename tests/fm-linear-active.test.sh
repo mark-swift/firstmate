@@ -243,15 +243,18 @@ test_move_type_fallback_for_custom_in_progress() {
   log="$home/curl.log"
   printf 'LINEAR_API_KEY=lin_k\n' > "$home/.env"
   # No state literally named "In Progress"; an unconfigured in-progress role falls
-  # back to the first "started"-typed state ("Doing").
-  local body='{"data":{"issue":{"id":"iss-3","team":{"states":{"nodes":[{"id":"st-todo","name":"Todo","type":"unstarted"},{"id":"st-doing","name":"Doing","type":"started"}]}}},"issueUpdate":{"success":true,"issue":{"id":"iss-3","state":{"name":"Doing"}}}}}'
+  # back to the lowest-position "started"-typed state. The states are ordered so the
+  # lowest-position started state ("Doing", position 2) is NOT first in the array
+  # (another started state, "In Review" at position 5, precedes it), proving the
+  # pick is deterministic by workflow position, not API array order.
+  local body='{"data":{"issue":{"id":"iss-3","team":{"states":{"nodes":[{"id":"st-todo","name":"Todo","type":"unstarted","position":1},{"id":"st-rev","name":"In Review","type":"started","position":5},{"id":"st-doing","name":"Doing","type":"started","position":2}]}}},"issueUpdate":{"success":true,"issue":{"id":"iss-3","state":{"name":"Doing"}}}}}'
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
     FAKE_CURL_LOG="$log" FAKE_GQL_CODE=200 FAKE_GQL_BODY="$body" \
     "$ROOT/bin/fm-linear-move.sh" iss-3 in-progress); rc=$?
   expect_code 0 "$rc" "move fallback exit"
   data=$(grep '^data=' "$log" | tail -1 | sed 's/^data=//')
   [ "$(printf '%s' "$data" | jq -r '.variables.stateId')" = "st-doing" ] \
-    || fail "in-progress must fall back to the first started state when unnamed"
+    || fail "in-progress must fall back to the lowest-position started state, not array order"
   # A configured name override resolves the custom in-progress state directly.
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
     FAKE_CURL_LOG="$log" FAKE_GQL_CODE=200 FAKE_GQL_BODY="$body" \
@@ -380,6 +383,8 @@ test_resolve_repo_feeds_risk_gate() {
 test_pr_check_feedback_wakes_once_then_dedupes() {
   local home fakebin shim out
   home="$TMP_ROOT/prfb"; mkdir -p "$home/state"
+  # A Linear-linked task (meta has linear_issue=) arms the feedback path.
+  printf 'linear_issue=iss-x\n' > "$home/state/prfb.meta"
   fakebin=$(make_fake_gh "$home")
   # Arm with no reviews yet: the cursor baselines to empty.
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
@@ -408,6 +413,7 @@ test_pr_check_feedback_wakes_once_then_dedupes() {
 test_pr_check_merge_not_regressed() {
   local home fakebin shim out
   home="$TMP_ROOT/prmerge"; mkdir -p "$home/state"
+  printf 'linear_issue=iss-x\n' > "$home/state/prmerge.meta"
   fakebin=$(make_fake_gh "$home")
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     GH_REVIEWS_JSON='{"reviews":[]}' \
@@ -423,6 +429,7 @@ test_pr_check_merge_not_regressed() {
 test_pr_check_baseline_silences_preexisting_review() {
   local home fakebin shim out
   home="$TMP_ROOT/prbase"; mkdir -p "$home/state"
+  printf 'linear_issue=iss-x\n' > "$home/state/prbase.meta"
   fakebin=$(make_fake_gh "$home")
   # Arm while a review already exists: the cursor baselines to it, so it is silent.
   PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
@@ -437,6 +444,30 @@ test_pr_check_baseline_silences_preexisting_review() {
     GH_REVIEWS_JSON='{"reviews":[{"state":"CHANGES_REQUESTED","submittedAt":"2024-01-01T00:00:00Z"},{"state":"CHANGES_REQUESTED","submittedAt":"2024-05-05T00:00:00Z"}]}' bash "$shim")
   [ "$out" = "pr-feedback prbase" ] || fail "a newer review after baselining must wake (got: $out)"
   pass "fm-pr-check baselines pre-existing reviews so only new feedback wakes"
+}
+
+test_pr_check_non_linear_arms_merge_only() {
+  local home fakebin shim out
+  home="$TMP_ROOT/prnonlin"; mkdir -p "$home/state"
+  # No linear_issue= meta: a non-Linear task must arm the merge-only shim.
+  printf 'kind=ship\nmode=no-mistakes\n' > "$home/state/prnonlin.meta"
+  fakebin=$(make_fake_gh "$home")
+  PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    GH_REVIEWS_JSON='{"reviews":[{"state":"CHANGES_REQUESTED","submittedAt":"2024-01-01T00:00:00Z"}]}' \
+    "$ROOT/bin/fm-pr-check.sh" prnonlin https://github.com/o/r/pull/4 >/dev/null 2>&1
+  shim="$home/state/prnonlin.check.sh"
+  assert_present "$shim" "fm-pr-check must arm a check shim for a non-Linear task"
+  assert_absent "$home/state/prnonlin.pr-feedback-seen" "a non-Linear task must create no feedback cursor"
+  assert_no_grep "pr-feedback" "$shim" "the non-Linear shim must not contain the feedback path"
+  # A new review must NEVER wake pr-feedback for a non-Linear task.
+  out=$(PATH="$fakebin:$BASE_PATH" GH_STATE_JSON='{"state":"OPEN"}' \
+    GH_REVIEWS_JSON='{"reviews":[{"state":"CHANGES_REQUESTED","submittedAt":"2024-02-02T00:00:00Z"}]}' bash "$shim")
+  [ -z "$out" ] || fail "a non-Linear task must never wake on review feedback (got: $out)"
+  # Merge detection still works.
+  out=$(PATH="$fakebin:$BASE_PATH" GH_STATE_JSON='{"state":"MERGED"}' \
+    GH_REVIEWS_JSON='{"reviews":[]}' bash "$shim")
+  [ "$out" = "merged" ] || fail "a non-Linear merged PR must still wake 'merged' (got: $out)"
+  pass "fm-pr-check arms a merge-only shim for a non-Linear task"
 }
 
 # ---------------------------------------------------------------------------
@@ -492,5 +523,6 @@ test_resolve_repo_feeds_risk_gate
 test_pr_check_feedback_wakes_once_then_dedupes
 test_pr_check_merge_not_regressed
 test_pr_check_baseline_silences_preexisting_review
+test_pr_check_non_linear_arms_merge_only
 test_brief_linear_variant
 test_brief_default_unchanged
