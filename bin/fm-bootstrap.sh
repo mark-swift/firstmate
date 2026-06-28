@@ -323,9 +323,14 @@ linear_mode_setup() {
   done
   if [ "$missing" -ne 0 ]; then
     if [ -e "$shim" ] || [ -e "$cadence" ]; then
-      linear_mode_remove_artifacts >/dev/null 2>&1 || true
+      if linear_mode_remove_artifacts; then
+        echo "LINEARMODE: Linear mode off - missing Linear poll dependencies; install them and rerun bootstrap"
+      else
+        echo "LINEARMODE: Linear mode off - failed to remove Linear poll shim or 60s cadence after missing dependencies"
+      fi
+    else
+      echo "LINEARMODE: Linear mode off - missing Linear poll dependencies; install them and rerun bootstrap"
     fi
-    echo "LINEARMODE: Linear mode off - missing Linear poll dependencies; install them and rerun bootstrap"
     return 0
   fi
 

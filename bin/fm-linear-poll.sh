@@ -121,6 +121,10 @@ NODES=$(jq -c --arg bot "$LINEAR_BOT" '
       id: (.id // ""),
       name: (.state.name // ""),
       type: (.state.type // ""),
+      # Newest non-bot comment by lexicographic max, which equals chronological
+      # order only because Linear consistently returns fixed-format ISO-8601 UTC
+      # timestamps (e.g. 2024-01-01T00:00:00.000Z); correct for the Linear API and
+      # the documented slice-1 assumption shared by the cts > prevc groom check.
       cts: ([ (.comments.nodes // [])[] | select(.user.id != $bot) | .createdAt ] | max // "")
     }
 ' "$BODY_FILE" 2>/dev/null) || { clear_error; exit 0; }
@@ -135,7 +139,7 @@ INBOX="$STATE/linear-inbox"
 # cause is repaired (at-least-once delivery).
 advance_markers() {
   printf '%s' "$kind" > "$SEEN/$iid.state" 2>/dev/null || true
-  if [ "$kind" = backlog ] && [ -n "$cts" ]; then
+  if [ -n "$cts" ]; then
     printf '%s' "$cts" > "$SEEN/$iid.comment" 2>/dev/null || true
   fi
 }

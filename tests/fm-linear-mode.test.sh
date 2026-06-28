@@ -278,6 +278,37 @@ test_poll_groom_after_first_sight_without_comments() {
   pass "fm-linear-poll grooms the first comment on a witnessed comment-less backlog item"
 }
 
+test_poll_groom_no_spurious_wake_on_ready_to_backlog() {
+  local home fakebin out rc ready backlog newer
+  home="$TMP_ROOT/poll-groom-r2b"; mkdir -p "$home"
+  fakebin=$(make_fake_curl "$home")
+  printf 'LINEAR_API_KEY=lin_k\nLINEAR_BOT_USER_ID=bot-1\n' > "$home/.env"
+  # First sight in READY state carrying a pre-existing non-bot comment: the comment
+  # baseline must be recorded even though the ticket is not in backlog.
+  ready=$(issue_body '{"id":"iss-rb","identifier":"ENG-11","title":"x","state":{"name":"Ready","type":"unstarted"},"team":{"id":"t","key":"E","name":"E"},"project":{"id":"p","name":"W"},"labels":{"nodes":[]},"comments":{"nodes":[{"id":"c1","createdAt":"2024-01-01T00:00:00.000Z","user":{"id":"alice"}}]}}')
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$ready" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll groom r2b ready exit"
+  [ "$out" = "linear-ready iss-rb" ] || fail "first sight of a ready ticket must wake ready (got: $out)"
+  rm -f "$home/state/linear-inbox/iss-rb.json"
+  # Moved to BACKLOG carrying that SAME old comment: must NOT groom (no spurious wake).
+  backlog=$(issue_body '{"id":"iss-rb","identifier":"ENG-11","title":"x","state":{"name":"Backlog","type":"backlog"},"team":{"id":"t","key":"E","name":"E"},"project":{"id":"p","name":"W"},"labels":{"nodes":[]},"comments":{"nodes":[{"id":"c1","createdAt":"2024-01-01T00:00:00.000Z","user":{"id":"alice"}}]}}')
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$backlog" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll groom r2b backlog exit"
+  [ -z "$out" ] || fail "a ready->backlog move with only pre-existing comments must not groom (got: $out)"
+  assert_absent "$home/state/linear-inbox/iss-rb.json" "a spurious groom must not stash an inbox"
+  # A genuinely newer non-bot comment still grooms.
+  newer=$(issue_body '{"id":"iss-rb","identifier":"ENG-11","title":"x","state":{"name":"Backlog","type":"backlog"},"team":{"id":"t","key":"E","name":"E"},"project":{"id":"p","name":"W"},"labels":{"nodes":[]},"comments":{"nodes":[{"id":"c1","createdAt":"2024-01-01T00:00:00.000Z","user":{"id":"alice"}},{"id":"c2","createdAt":"2024-06-06T00:00:00.000Z","user":{"id":"alice"}}]}}')
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    FAKE_GQL_CODE=200 FAKE_GQL_BODY="$newer" "$ROOT/bin/fm-linear-poll.sh"); rc=$?
+  expect_code 0 "$rc" "poll groom r2b newer exit"
+  [ "$out" = "linear-groom iss-rb" ] || fail "a genuinely newer non-bot comment must groom (got: $out)"
+  [ "$(jq -r .event "$home/state/linear-inbox/iss-rb.json")" = "linear-groom" ] \
+    || fail "stashed groom inbox must carry the event type"
+  pass "fm-linear-poll does not spuriously groom on ready->backlog with pre-existing comments"
+}
+
 test_poll_canceled_requires_witnessed_transition() {
   local home fakebin out rc backlog canceled
   home="$TMP_ROOT/poll-cancel"; mkdir -p "$home"
@@ -606,6 +637,7 @@ test_poll_missing_dep_reports_error
 test_poll_ready_wakes_and_dedupes
 test_poll_groom_requires_new_nonbot_comment
 test_poll_groom_after_first_sight_without_comments
+test_poll_groom_no_spurious_wake_on_ready_to_backlog
 test_poll_canceled_requires_witnessed_transition
 test_poll_first_sight_canceled_is_silent
 test_poll_rejects_unsafe_issue_id
