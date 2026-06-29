@@ -41,6 +41,8 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 SUB_HOME_MARKER=".fm-secondmate-home"
 # shellcheck source=bin/fm-ff-lib.sh
 . "$SCRIPT_DIR/fm-ff-lib.sh"
+# shellcheck source=bin/fm-worktree-lib.sh
+. "$SCRIPT_DIR/fm-worktree-lib.sh"
 # Skip the watcher guard when re-exec'd for one pair of a batch (FM_SPAWN_NO_GUARD is
 # set by the batch loop below), so the guard runs once for the batch, not once per pair.
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
@@ -362,42 +364,64 @@ tmux new-window -d -t "$SES" -n "$W" -c "$PROJ_ABS"
 if [ "$KIND" != secondmate ]; then
   tmux send-keys -t "$T" 'treehouse get' Enter
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
-  for _ in $(seq 1 60); do
+  # Resolve the crewmate's isolated worktree deterministically, then record THAT
+  # exact value - the launch path, the isolation check, and the meta write all use
+  # one validated value, so the path the crewmate runs in and the path stored in
+  # state/<id>.meta (which fm-teardown/fm-guard trust) are provably identical.
+  #
+  # treehouse get drops the pane into a fresh worktree subshell, but that new
+  # shell runs the captain's shell init, which can cd elsewhere mid-init
+  # (observed: ~/.oh-my-zsh, itself a git repo) before settling at the worktree
+  # root. The old loop accepted the FIRST pane cwd that merely differed from
+  # PROJ_ABS, so it could latch onto that transient cwd and record e.g.
+  # worktree=~/.oh-my-zsh into meta, and the old isolation guard (which only
+  # checked "some git repo distinct from PROJ_ABS") waved it through because
+  # ~/.oh-my-zsh is its own repo whose toplevel == itself. The fix is to accept a
+  # pane cwd only once it is a genuine worktree of THIS repo: it must share
+  # PROJ_ABS's git object store (same common-dir; a stray repo like ~/.oh-my-zsh
+  # fails this) and be a real worktree root distinct from the primary checkout.
+  # fm_worktree_root_if_isolated returns that canonical root or rejects the path,
+  # so it is at once the wait condition and the hardened isolation assertion - a
+  # bad capture can never be recorded; it either keeps waiting or aborts loudly.
+  proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P || true)
+  proj_common=$(fm_git_common_dir_abs "$PROJ_ABS" || true)
+  if [ -z "$proj_common" ]; then
+    echo "error: project checkout $PROJ_ABS is not a git repository; cannot resolve an isolated worktree. Inspect window $T" >&2
+    exit 1
+  fi
+  # Timeout is configurable so tests need not wait the full minute; real spawns use 60.
+  wt_timeout=${FM_SPAWN_WORKTREE_TIMEOUT:-60}
+  WT=""
+  wt_bad=""      # last pane cwd that was NOT a valid isolated worktree
+  wt_bad_seen=0  # consecutive polls it persisted (a settled misfire vs transient churn)
+  for _ in $(seq 1 "$wt_timeout"); do
     p=$(tmux display-message -p -t "$T" '#{pane_current_path}' 2>/dev/null || true)
     if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ]; then
-      WT="$p"
-      break
+      if WT=$(fm_worktree_root_if_isolated "$p" "$proj_common" "$proj_real"); then
+        break
+      fi
+      WT=""
+      # Not a valid isolated worktree. A path that PERSISTS across polls is a
+      # settled misfire (treehouse landed the pane somewhere wrong - the primary
+      # checkout, a stray repo, a non-worktree dir) - abort loudly now instead of
+      # waiting out the whole timeout. A path that keeps CHANGING is benign
+      # shell-init churn (e.g. a transient cd into ~/.oh-my-zsh); keep waiting for
+      # it to settle at the real worktree.
+      if [ "$p" = "$wt_bad" ]; then
+        wt_bad_seen=$((wt_bad_seen + 1))
+      else
+        wt_bad="$p"
+        wt_bad_seen=1
+      fi
+      if [ "$wt_bad_seen" -ge 2 ]; then
+        echo "error: treehouse get settled the pane at '$p', which is not an isolated worktree of $PROJ_ABS (primary checkout); refusing to launch to avoid tangling the primary checkout. Inspect window $T" >&2
+        exit 1
+      fi
     fi
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
-    exit 1
-  fi
-
-  # Isolation guard: refuse to launch unless WT is a genuine, ISOLATED worktree -
-  # a real git worktree root, distinct from the project's primary checkout
-  # (PROJ_ABS). Firstmate is a treehouse-pooled repo of itself, so a treehouse-get
-  # misfire can leave the pane in (or in a subdir of, or a symlink to) the primary
-  # checkout; branching/committing there would tangle the primary onto a feature
-  # branch (see fm-tangle-lib.sh). The wait loop above only proves the pane left
-  # PROJ_ABS's exact path; this proves it landed in a true, separate worktree.
-  wt_real=
-  if ! wt_real=$(cd "$WT" 2>/dev/null && pwd -P); then
-    wt_real=
-  fi
-  proj_real=
-  if ! proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P); then
-    proj_real=
-  fi
-  wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null || true)
-  wt_top_real=
-  if ! wt_top_real=$(cd "$wt_top" 2>/dev/null && pwd -P); then
-    wt_top_real=
-  fi
-  if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
-    echo "error: treehouse get did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect window $T" >&2
+    echo "error: treehouse get did not enter an isolated worktree of $PROJ_ABS within ${wt_timeout}s; inspect window $T" >&2
     exit 1
   fi
 fi
