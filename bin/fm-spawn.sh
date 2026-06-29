@@ -382,7 +382,11 @@ if [ "$KIND" != secondmate ]; then
   # fails this) and be a real worktree root distinct from the primary checkout.
   # fm_worktree_root_if_isolated returns that canonical root or rejects the path,
   # so it is at once the wait condition and the hardened isolation assertion - a
-  # bad capture can never be recorded; it either keeps waiting or aborts loudly.
+  # bad capture can never be recorded. The loop is pure-wait: it accepts only a
+  # validated isolated worktree, otherwise it keeps polling. So any transient cwd
+  # during shell init (a cd into a stray repo like ~/.oh-my-zsh, of any duration)
+  # is simply waited out until the pane settles at the real worktree, and the
+  # spawn aborts only if no valid worktree appears within the timeout.
   proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P || true)
   proj_common=$(fm_git_common_dir_abs "$PROJ_ABS" || true)
   if [ -z "$proj_common" ]; then
@@ -392,8 +396,6 @@ if [ "$KIND" != secondmate ]; then
   # Timeout is configurable so tests need not wait the full minute; real spawns use 60.
   wt_timeout=${FM_SPAWN_WORKTREE_TIMEOUT:-60}
   WT=""
-  wt_bad=""      # last pane cwd that was NOT a valid isolated worktree
-  wt_bad_seen=0  # consecutive polls it persisted (a settled misfire vs transient churn)
   for _ in $(seq 1 "$wt_timeout"); do
     p=$(tmux display-message -p -t "$T" '#{pane_current_path}' 2>/dev/null || true)
     if [ -n "$p" ] && [ "$p" != "$PROJ_ABS" ]; then
@@ -401,22 +403,6 @@ if [ "$KIND" != secondmate ]; then
         break
       fi
       WT=""
-      # Not a valid isolated worktree. A path that PERSISTS across polls is a
-      # settled misfire (treehouse landed the pane somewhere wrong - the primary
-      # checkout, a stray repo, a non-worktree dir) - abort loudly now instead of
-      # waiting out the whole timeout. A path that keeps CHANGING is benign
-      # shell-init churn (e.g. a transient cd into ~/.oh-my-zsh); keep waiting for
-      # it to settle at the real worktree.
-      if [ "$p" = "$wt_bad" ]; then
-        wt_bad_seen=$((wt_bad_seen + 1))
-      else
-        wt_bad="$p"
-        wt_bad_seen=1
-      fi
-      if [ "$wt_bad_seen" -ge 2 ]; then
-        echo "error: treehouse get settled the pane at '$p', which is not an isolated worktree of $PROJ_ABS (primary checkout); refusing to launch to avoid tangling the primary checkout. Inspect window $T" >&2
-        exit 1
-      fi
     fi
     sleep 1
   done
