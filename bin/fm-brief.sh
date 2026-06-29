@@ -39,13 +39,24 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
+LINEAR_BRANCH=""
 POS=()
-for a in "$@"; do
+ALL=("$@")
+i=0
+while [ "$i" -lt "${#ALL[@]}" ]; do
+  a=${ALL[$i]}
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --linear-branch)
+      i=$((i + 1))
+      LINEAR_BRANCH=${ALL[$i]:-}
+      [ -n "$LINEAR_BRANCH" ] || { echo "error: --linear-branch requires a branch name" >&2; exit 1; }
+      ;;
+    --linear-branch=*) LINEAR_BRANCH=${a#*=} ;;
     *) POS+=("$a") ;;
   esac
+  i=$((i + 1))
 done
 ID=${POS[0]}
 
@@ -171,6 +182,25 @@ read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
 
+# Linear ship variant: a Linear-assigned ticket always ships through the
+# no-mistakes gate (regardless of the project's registered mode) on a branch named
+# EXACTLY the ticket's Linear branchName, so Linear's GitHub integration auto-links
+# the PR. The branch defaults to fm/<id> for every other ship task.
+BRANCH="fm/$ID"
+LINEAR_SECTION=""
+if [ -n "$LINEAR_BRANCH" ]; then
+  MODE=no-mistakes
+  BRANCH="$LINEAR_BRANCH"
+  LINEAR_SECTION=$(cat <<EOF
+
+# Linear ship contract
+This task delivers a Linear ticket. The branch you created above is the ticket's EXACT Linear \`branchName\` - do not rename it, because Linear's GitHub integration auto-links the PR to the ticket by that branch name.
+In-progress questions and decisions go through firstmate (rules 5 and 6 below), NEVER through Linear comments.
+WIP-on-blocker: if you hit a blocker or a needs-decision, then BEFORE you idle, commit your work-in-progress with a documented message (current state, what is blocking, the open question, and the next step in the commit body) and push your feature branch \`$BRANCH\` to \`origin\`, so a lost session can resume from the branch. Then append the \`blocked:\`/\`needs-decision:\` status line and stop.
+EOF
+)
+fi
+
 case "$MODE" in
   direct-PR)
     SETUP2=""
@@ -235,7 +265,7 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
 
-1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
+1. First action: create your branch: \`git checkout -b $BRANCH\`$SETUP2
 
 # Rules
 $RULE1
@@ -251,6 +281,7 @@ $RULE1
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions, ask-user findings),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+$LINEAR_SECTION
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.

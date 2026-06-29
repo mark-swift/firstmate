@@ -104,12 +104,14 @@ These paths need `jq` to build the JSON payload, but they run before token and n
 ## Linear mode (.env)
 
 Linear mode lets a firstmate instance use Linear as a work source: the captain assigns ready, bot-owned tickets and firstmate ships them through no-mistakes as PRs.
-This documents slice 1 only - the inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes; the responder skill and active ship/review lifecycle land in a later slice.
+It is inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes, plus the `linear-respond` active ship/review lifecycle that acts on them; ticket ideation lands in a later slice.
 It is off unless the firstmate home's gitignored `.env` contains a non-empty `LINEAR_API_KEY`.
 That key is the activation gate and the only strictly required value.
 `LINEAR_API_URL` is optional and defaults to `https://api.linear.app/graphql`; `LINEAR_BOT_USER_ID` is the bot's Linear user id and is required for the poll to scope tickets to the bot.
 A Linear personal API key authenticates with the **raw** key value in the `Authorization` header (no `Bearer` prefix), written to a `0600` temp file.
-The state-name mapping (`LINEAR_STATE_READY`, `LINEAR_STATE_BACKLOG`, `LINEAR_STATE_CANCELED`) is optional: a configured non-empty name matches case-insensitively, while an unset role falls back to the Linear workflow-state type (`unstarted` -> ready, `backlog` -> backlog, `canceled` -> canceled).
+The read-role state-name mapping (`LINEAR_STATE_READY`, `LINEAR_STATE_BACKLOG`, `LINEAR_STATE_CANCELED`) is optional: a configured non-empty name matches case-insensitively, while an unset role falls back to the Linear workflow-state type (`unstarted` -> ready, `backlog` -> backlog, `canceled` -> canceled).
+The transition-role names firstmate moves tickets into - `LINEAR_STATE_IN_PROGRESS` (default "In Progress") and `LINEAR_STATE_IN_REVIEW` (default "In Review") - are optional too, matched primarily by name (Linear has no distinct "review" type), with a `started`-type fallback for in-progress only.
+`LINEAR_INFLIGHT_CAP` (default 1) bounds the ship tasks firstmate runs per repo, and `LINEAR_DRY_RUN` previews Linear writes to `state/linear-outbox/` instead of performing them - a grooming comment as `<issue>.json` (fully offline) and a state transition as `<issue>.move.json` (the resolving states read still runs, so a move dry-run needs the key).
 For every key an explicit environment variable wins over the `.env` file; `LINEAR_ENV_FILE` can point direct client invocations at another `.env`-style file, but bootstrap activation still keys off `$FM_HOME/.env` presence.
 
 Bootstrap turns the key into local generated state.
@@ -117,11 +119,11 @@ It writes `state/linear-watch.check.sh`, a check shim that runs `bin/fm-linear-p
 When the key is removed or empty, the next bootstrap removes those artifacts; steady-state off is silent and writes nothing.
 
 `bin/fm-linear-poll.sh` does one bounded GraphQL poll of the tickets assigned to `LINEAR_BOT_USER_ID`.
-For each bot-assigned ticket it emits at most one wake per genuine transition, deduped via per-issue seen-markers under `state/linear-seen/`, and atomically stashes the full issue node (plus an `event` field) to `state/linear-inbox/<issue-id>.json` for the responder skill to drain in a later slice.
+For each bot-assigned ticket it emits at most one wake per genuine transition, deduped via per-issue seen-markers under `state/linear-seen/`, and atomically stashes the full issue node (plus an `event` field) to `state/linear-inbox/<issue-id>.json` for the `linear-respond` skill to drain.
 `linear-ready <issue-id>` fires on first sight of a ready bot-assigned ticket; `linear-canceled <issue-id>` fires only on a witnessed transition to canceled; `linear-groom <issue-id>` fires on a new non-bot comment on a bot-assigned backlog item, with the first sighting recording the marker silently so a fresh home does not flood on history.
 Auth, config, HTTP, or GraphQL failures, and missing `curl`/`jq`, are reported once as `linear-error ...` (deduped via `state/linear-poll.error`) without echoing the untrusted server message.
 Which `projects/<repo>` a ticket maps to is resolved with layered precedence (a per-issue `repo:` label or Repository field, then the Linear Project, then the Team, else unresolved) from `config/linear-projects.tsv`, tab-separated `<project-id-or-name|team-id-or-key-or-name>\t<projects/repo>` lines with `#` comments ignored; `LINEAR_PROJECTS_MAP` overrides the map path.
-The resolver and meta-link helpers (`linear_issue=`/`linear_branch=`) ship now but are consumed by the active lifecycle in the next slice.
+The resolver and meta-link helpers (`linear_issue=`/`linear_branch=`) are consumed by the `linear-respond` lifecycle: a resolved repo is validated against its Linear-connected GitHub origin before dispatch, and an unresolved repo holds the ticket at the risk gate.
 
 ## Environment variables
 
@@ -154,6 +156,10 @@ LINEAR_BOT_USER_ID=     # Linear user id of the firstmate bot; required for the 
 LINEAR_STATE_READY=     # optional ready-state name; unset falls back to the unstarted workflow-state type
 LINEAR_STATE_BACKLOG=   # optional backlog-state name; unset falls back to the backlog workflow-state type
 LINEAR_STATE_CANCELED=  # optional canceled-state name; unset falls back to the canceled workflow-state type
+LINEAR_STATE_IN_PROGRESS=  # optional In Progress state name (default "In Progress"); matched by name, started-type fallback
+LINEAR_STATE_IN_REVIEW=    # optional In Review state name (default "In Review"); matched by name only (no type fallback)
+LINEAR_INFLIGHT_CAP=    # optional max ship tasks firstmate runs per repo at once (default 1)
+LINEAR_DRY_RUN=         # optional; truthy previews Linear writes to state/linear-outbox/ (comment as <issue>.json, transition as <issue>.move.json) instead of performing them
 LINEAR_ENV_FILE=        # optional alternate .env file for direct Linear client invocations; bootstrap still checks $FM_HOME/.env
 LINEAR_PROJECTS_MAP=    # optional override path for the project/team -> repo map (default config/linear-projects.tsv)
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace

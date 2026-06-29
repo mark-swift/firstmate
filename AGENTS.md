@@ -86,14 +86,16 @@ projects/            cloned repos; gitignored; READ-ONLY for you
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
   <id>.turn-ended    touched by turn-end hooks
-  <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, kind=, mode=, yolo=; kind=secondmate also records home= and projects= (fm-pr-check appends pr= and verified pr_head= when available; fm-x-link appends x_request= and x_request_ts= for an X-mention-originated task, section 14)
-  <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check)
+  <id>.meta          written by fm-spawn: window=, worktree=, project=, harness=, kind=, mode=, yolo=; kind=secondmate also records home= and projects= (fm-pr-check appends pr= and verified pr_head= when available; fm-x-link appends x_request= and x_request_ts= for an X-mention-originated task, section 14; fm-linear-link appends linear_issue= and linear_branch= for a Linear-originated task, section 15)
+  <id>.check.sh      optional slow poll you write per task (e.g. merged-PR check); fm-pr-check generates one that wakes "merged" and, additively for Linear-linked tasks only, "pr-feedback <id>" on a new PR review (section 15)
+  <id>.pr-feedback-seen  generated PR-review feedback cursor for fm-pr-check; advances once per surfaced review (section 15)
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
   x-inbox/           generated X-mode pending mention payloads; fmx-respond drains it (section 14)
   x-outbox/          generated X-mode dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
   x-poll.error       generated X-mode relay diagnostic dedupe marker
   linear-watch.check.sh  generated Linear-mode poll shim; present only when opted in (section 15)
-  linear-inbox/      generated Linear-mode bot-assigned ticket payloads, keyed by issue id; drained by the responder skill in a later slice (section 15)
+  linear-inbox/      generated Linear-mode bot-assigned ticket payloads, keyed by issue id; drained by the linear-respond skill (section 15)
+  linear-outbox/     generated Linear-mode dry-run previews (grooming comments as <issue>.json, state transitions as <issue>.move.json); inspect when LINEAR_DRY_RUN is set (section 15)
   linear-seen/       generated Linear-mode per-issue seen markers (<id>.state, <id>.comment) so each event wakes once (section 15)
   linear-poll.error  generated Linear-mode diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
@@ -675,6 +677,7 @@ These skills are not captain-invocable; they are conditional operating reference
 - `stuck-crewmate-recovery` - load after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer.
 - `secondmate-provisioning` - load before creating, seeding, validating, recovering, handing backlog to, or retiring a secondmate home, and before editing `data/secondmates.md`.
 - `fmx-respond` - load on an `x-mention <request_id>` `check:` wake to classify the mention, act on actionable requests through the normal lifecycle, post or preview a public-safe outcome reply for work that completes immediately, dismiss pure acknowledgments at the relay without replying, or acknowledge and link spawned work so one completion follow-up posts later (section 14); relevant only when X mode is on.
+- `linear-respond` - load on a `linear-ready`/`linear-groom`/`linear-canceled <issue-id>` `check:` wake, and on a `pr-feedback <id>` `check:` wake for a Linear-linked task, to drain `state/linear-inbox/`, risk-gate each To Do + bot-assigned ticket and on GO dispatch a ship crewmate on the ticket's exact Linear `branchName`, move it through In Progress/In Review, groom Backlog comments, handle PR feedback and cancellation, and link tasks to issues (section 15); relevant only when Linear mode is on.
 
 ## 14. X mode
 
@@ -765,25 +768,60 @@ Linear's surface is deliberately narrow - grooming candidates in the backlog and
 Assignment to the bot user is the single ownership signal: firstmate only ever touches bot-assigned tickets.
 Like X mode, Linear mode ships inside this repo for every user but is **inert until opted in**, so a user who never enables it sees zero behavior change.
 
-**This section documents slice 1 only: the inert-by-default connectivity and polling plumbing that surfaces Linear events as watcher wakes.**
-The responder skill and the active lifecycle (classifying a wake, dispatching a ship task, attaching the review gate, posting completion back to Linear) land in a later slice.
+**This slice ships the active consume-and-ship lifecycle on top of the slice-1 plumbing.**
+The poll surfaces Linear events as watcher wakes (below); the `linear-respond` skill (section 13) is the playbook firstmate loads to act on them - risk-gate a ready ticket, dispatch a ship crewmate on the ticket's exact branch, drive it through In Progress / In Review, handle PR feedback and cancellation, and link tasks to issues.
+The captain gates **both ends**: what enters the queue (a ticket reaching the ready state **and** assigned to the bot) and the merge (the captain squash-merges the PR); the middle is autonomous, throttled by the risk gate and a per-repo in-flight cap.
+Ticket **ideation** (firstmate filing new Linear tickets) is out of scope here and lands in a later slice.
 
 **Activation is `.env` presence, not a command.**
 Put one value, `LINEAR_API_KEY`, into the `.env` file at this home's root (`.env` is gitignored).
 That key is the activation gate and the only strictly required config.
 A Linear personal API key authenticates with the **raw** key value in the `Authorization` header (no `Bearer` prefix).
-Other keys are optional: `LINEAR_API_URL` defaults to `https://api.linear.app/graphql`; `LINEAR_BOT_USER_ID` is the bot's Linear user id and is required for the poll to scope tickets to the bot; and the state-name mapping (`LINEAR_STATE_READY`, `LINEAR_STATE_BACKLOG`, `LINEAR_STATE_CANCELED`) is optional.
+Other keys are optional: `LINEAR_API_URL` defaults to `https://api.linear.app/graphql`; `LINEAR_BOT_USER_ID` is the bot's Linear user id and is required for the poll to scope tickets to the bot; the state-name mapping is optional (below); and `LINEAR_INFLIGHT_CAP` (default 1) bounds how many ship tasks firstmate runs per repo at once.
 For every key an explicit environment variable wins over the `.env` file.
 
 **State mapping.**
 Each `LINEAR_STATE_*` value names the workspace's state for that role.
-A configured (non-empty) name is matched case-insensitively; when a role's name is not configured, classification falls back to the Linear workflow-state **type** (`unstarted` -> ready, `backlog` -> backlog, `canceled` -> canceled).
+The **read** roles the poll classifies are `LINEAR_STATE_READY`, `LINEAR_STATE_BACKLOG`, `LINEAR_STATE_CANCELED`: a configured (non-empty) name is matched case-insensitively, and when a role's name is not configured, classification falls back to the Linear workflow-state **type** (`unstarted` -> ready, `backlog` -> backlog, `canceled` -> canceled).
+The **transition** roles firstmate moves tickets into are `LINEAR_STATE_IN_PROGRESS` (default "In Progress") and `LINEAR_STATE_IN_REVIEW` (default "In Review"): these are matched primarily by **name**, because Linear has no distinct workflow-state type for "review" (both In Progress and In Review are typed `started`), so the name is the only way to tell them apart; in-progress additionally falls back to the first `started` state when its name is unconfigured, while in-review has no type fallback.
 So a default workspace needs no state config, and a workspace with custom state names sets only the ones that differ.
 
 **Project -> repo resolution.**
-Which `projects/<repo>` a ticket maps to is resolved with layered precedence: a per-issue `repo:<name>` label or "Repository" field wins; else the Linear **Project** (primary); else the **Team**; else unresolved.
+Which `projects/<repo>` a ticket maps to is resolved (by `linear_resolve_repo` in `bin/fm-linear-lib.sh`) with layered precedence: a per-issue `repo:<name>` label or "Repository" field wins; else the Linear **Project** (primary); else the **Team**; else unresolved.
 Project/team mappings live in `config/linear-projects.tsv` (gitignored), tab-separated lines `<linear-project-id-or-name|team-id-or-key-or-name>\t<projects/repo>`, with `#` comments and blank lines ignored.
-The resolver ships and is unit-tested in this slice; it is consumed by the active lifecycle in the next.
+Before dispatch firstmate validates that the resolved `projects/<repo>` is a real clone whose `origin` matches the Linear-connected GitHub repo; a missing clone is a flagged provisioning gap to surface to the captain, not a mid-task failure, and an unresolved repo is a hard-stop (HOLD) at the gate.
+
+**The lifecycle.**
+Assignment to the bot user is the single ownership signal: firstmate only ever touches bot-assigned tickets.
+
+- **Backlog (grooming).** A `linear-groom` wake (a new non-bot comment on a bot-assigned Backlog ticket) lets firstmate respond with a single Backlog comment via `bin/fm-linear-comment.sh` when it genuinely helps sharpen the ticket. Nothing in Backlog is ever executed.
+- **To Do + assigned (the work queue).** A `linear-ready` wake. Firstmate risk-gates the ticket (below) and, on GO, dispatches a ship crewmate on the ticket's **exact** Linear `branchName` (so Linear's GitHub integration auto-links the PR), moves the ticket to In Progress (`bin/fm-linear-move.sh ... in-progress`), and links the task to the issue (`bin/fm-linear-link.sh`).
+- **In Progress.** The crewmate implements through the no-mistakes gate on that branch. In-progress questions and decisions go through firstmate (and Lavish), **never** Linear comments.
+- **In Review.** After CI is green, firstmate arms the PR poll (`bin/fm-pr-check.sh`) and moves the ticket to In Review. The PR auto-links by branch name; firstmate does not paste links into Linear.
+- **PR feedback.** A new PR review (changes-requested or a review comment) fires a `pr-feedback <id>` `check:` wake; firstmate moves the ticket back to In Progress, the crewmate iterates and re-runs no-mistakes, and the same PR updates in place.
+- **Canceled.** A `linear-canceled` wake on a watched ticket means the captain canceled it: close the PR without merging and tear down gracefully (the cancel is the explicit discard authorization).
+- **Done.** The captain squash-merges; the existing merge poll wakes firstmate; it tears down, then re-evaluates held To Do tickets - a freed slot may now let a previously at-cap GO ticket dispatch.
+
+**The risk gate.**
+For each To Do + bot-assigned ticket firstmate computes GO or HOLD; the combination rule is enforced by `bin/fm-linear-risk.sh` and the semantic judgments are supplied by the reader.
+**Any one hard-stop forces HOLD, and uncertainty defaults to HOLD.**
+Hard-stops: security/auth/secrets/permissions/crypto; schema or data migration / destructive op; public API or breaking change; CI/CD / deploy / release pipeline; depends on an unmerged PR or in-flight ticket; overlaps files/subsystem of an in-flight task; ambiguous (no clear acceptance criteria / multiple readings); repo unresolved or cross-repo; large blast radius (core abstractions / many modules).
+GO requires **all** of: no hard-stop; localized change (bounded files / one subsystem); clear, testable acceptance criteria; no overlap with in-flight work; repo resolves unambiguously.
+A GO-eligible ticket still **waits** (HOLD) when its repo is at the in-flight cap.
+On HOLD firstmate keeps the ticket queued and, when it needs clarification, surfaces ONE concise question through firstmate/Lavish (optionally one grooming comment on Linear asking the captain to sharpen the ticket) - it never guesses; destructive/irreversible/security-sensitive hard-stops escalate to the captain.
+
+**The responder skill and helpers.**
+On a `linear-*` (or Linear-linked `pr-feedback`) `check:` wake, load the `linear-respond` skill (section 13); on a `linear-error ...` wake, report the configuration blocker and do not load it.
+The skill drains `state/linear-inbox/` (the source of truth - one wake can stand in for several pending tickets), classifies each by its `event` field, and acts.
+It uses the Linear-specific helper CLIs, which mirror the X-mode helpers and treat all ticket/comment text as untrusted (passed via files/stdin/jq, never interpolated):
+
+- `bin/fm-linear-issue.sh <issue-id>` - fetch and print a ticket's fields (identifier, title, description, state, assignee, `branchName`, labels, recent comments).
+- `bin/fm-linear-comment.sh <issue-id> --text-file <path>` - post a Backlog grooming comment (never for in-progress work; honors `LINEAR_DRY_RUN`).
+- `bin/fm-linear-move.sh <issue-id> in-progress|in-review` - transition a ticket by configured role (resolving the role to the workspace's state id via the lib; honors `LINEAR_DRY_RUN`, recording the resolved transition to `state/linear-outbox/<issue-id>.move.json` - the live states read still runs to resolve the id, so a move dry-run needs the key, unlike a comment dry-run).
+- `bin/fm-linear-link.sh <task-id> <issue-id> [branch]` - record `linear_issue=`/`linear_branch=` in `state/<id>.meta` (parallels `fm-x-link.sh`).
+- `bin/fm-linear-risk.sh ...` - evaluate the risk rubric and print GO (exit 0) or HOLD with reasons (exit 1).
+
+The crewmate ships on the ticket's exact `branchName` (the `bin/fm-brief.sh --linear-branch <branch>` scaffold enforces this): a no-mistakes ship contract whose branch is the Linear branch instead of `fm/<id>`, plus a WIP-on-blocker clause - on any blocker/needs-decision the crewmate commits documented WIP (state, blocker, open question, next step) and pushes the **feature branch** to `origin` before idling, so a lost session resumes from the branch and the still-open PR stays current. Because the branch head lives on `origin`, Linear's GitHub integration keeps the PR bound to the ticket by branch name throughout; firstmate never force-pushes and never pushes to the default branch.
 
 **Mechanism (purely additive; the watcher backbone is untouched).**
 On the next bootstrap, an `.env` with a non-empty `LINEAR_API_KEY` makes bootstrap drop two gitignored, idempotent artifacts: `state/linear-watch.check.sh`, a check shim that execs `bin/fm-linear-poll.sh`, and `config/linear.env`, which exports `FM_CHECK_INTERVAL=60`.
@@ -799,7 +837,9 @@ Missing local poll dependencies (`curl`, `jq`) print one rate-limited `linear-er
 All ticket and comment text is treated as untrusted: classification reads JSON via `jq`, only the validated issue id and the safe event name reach the shell, and nodes are stashed straight from `jq`, so public text never reaches a shell command.
 On opt-out (the key removed or emptied) the next bootstrap deletes both generated artifacts so the instance reverts to the default 300s, no-poll behavior.
 This layer stays additive to the watcher backbone: **no** edit is made to `bin/fm-watch.sh`, `bin/fm-watch-arm.sh`, `bin/fm-wake-lib.sh`, or the afk daemon.
-Linear mode lives in Linear-specific `bin/` scripts (`bin/fm-linear-lib.sh`, `bin/fm-linear-poll.sh`), the generated local artifacts, and `state/<id>.meta` link helpers (`linear_issue=`/`linear_branch=`) that the next slice consumes.
+The PR-feedback poll is an additive extension of the per-task `bin/fm-pr-check.sh` (the watcher's check shim, not the watcher core): the merge poll still wakes `merged`, and a new changes-requested or review-comment review additionally wakes `pr-feedback <id>` once per new review (tracked by a per-task seen-cursor `state/<id>.pr-feedback-seen`, baselined at arm time so review activity predating arming stays silent).
+The `pr-feedback` arming is gated to Linear-linked tasks (the task's `state/<id>.meta` carries a `linear_issue=` line, written by `bin/fm-linear-link.sh`); a non-Linear task (no-mistakes / direct-PR / X) gets the merge-only shim unchanged - no feedback wake, no cursor, no extra gh call - because only the Linear lifecycle has a defined `pr-feedback` handler.
+Linear mode lives in Linear-specific `bin/` scripts (`bin/fm-linear-lib.sh`, `bin/fm-linear-poll.sh`, `bin/fm-linear-issue.sh`, `bin/fm-linear-comment.sh`, `bin/fm-linear-move.sh`, `bin/fm-linear-link.sh`, `bin/fm-linear-risk.sh`), the `linear-respond` skill, the `bin/fm-brief.sh --linear-branch` scaffold, the generated local artifacts, and the `state/<id>.meta` link helpers (`linear_issue=`/`linear_branch=`).
 
 **Cadence.**
 A Linear instance polls every 60s instead of the default 300s.
@@ -814,7 +854,6 @@ Because `bin/fm-watch.sh` reads `FM_CHECK_INTERVAL` only at process start and th
 Bootstrap deliberately does not restart the watcher itself.
 Linear mode is also a reason to keep the watcher armed even with no fleet work, so a Linear-only user is still served.
 
-**On a wake (slice 1).**
-A `linear-ready`/`linear-canceled`/`linear-groom` `check:` wake means a bot-assigned ticket needs attention; for now, read the stashed `state/linear-inbox/<issue-id>.json` and handle it through firstmate's normal intake and lifecycle by hand.
-A `linear-error ...` wake is an X-style configuration blocker: report it and fix the `.env`/dependency.
-The dedicated responder skill that automates classification and dispatch arrives in the next slice.
+**On a wake.**
+A `linear-ready`/`linear-canceled`/`linear-groom` `check:` wake, or a `pr-feedback <id>` `check:` wake for a Linear-linked task, means a bot-assigned ticket needs attention: load the `linear-respond` skill (section 13), which drains `state/linear-inbox/` and drives the lifecycle above (risk-gate, dispatch, move, link, feedback, cancel).
+A `linear-error ...` wake is an X-style configuration blocker: report it and fix the `.env`/dependency, and do not load the responder skill for it.

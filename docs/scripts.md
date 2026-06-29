@@ -9,7 +9,7 @@ Each file also starts with a short header comment.
 | `fm-fleet-sync.sh`       | Fetch clones, fast-forward safe default-branch states, self-heal clean detached ancestor drift, report unsafe drift as `STUCK:`, and safely prune branches whose remote is gone |
 | `fm-update.sh`           | Self-update the running firstmate repo and registered secondmate homes with fast-forward-only pulls from origin     |
 | `fm-backlog-handoff.sh`  | Move already-judged in-scope queued backlog items from the main home into a seeded secondmate home                 |
-| `fm-brief.sh`            | Scaffold a ship brief with a worktree-isolation assertion, a report-only scout brief with `--scout`, or a secondmate charter with `--secondmate` |
+| `fm-brief.sh`            | Scaffold a ship brief with a worktree-isolation assertion, a report-only scout brief with `--scout`, a Linear ship brief on the ticket's exact branch with `--linear-branch`, or a secondmate charter with `--secondmate` |
 | `fm-ensure-agents-md.sh` | Ensure project `AGENTS.md` is the real memory file and `CLAUDE.md` symlinks to it                                   |
 | `fm-guard.sh`            | Warn when the primary checkout is tangled, when queued wakes are pending, or when a stale or missing watcher needs a prominent banner |
 | `fm-home-seed.sh`        | Lease/provision a secondmate home transactionally, clone projects, initialize gates, and maintain `data/secondmates.md` |
@@ -31,7 +31,7 @@ Each file also starts with a short header comment.
 | `fm-send.sh`             | Send one verified literal line (or `--key Escape`) to a direct-report window; exits non-zero on confirmed swallowed Enter; bare `kind=secondmate` targets are marked as from-firstmate; slash commands and codex `$...` skill invocations get popup-settle before Enter; text sends pause `FM_SEND_SETTLE` seconds after success |
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for busy detection, dim-ghost-aware and border-aware composer detection, and verified submit retry |
 | `fm-peek.sh`             | Print a bounded tail of a crewmate pane                                                                             |
-| `fm-pr-check.sh`         | Record `pr=` and a verified `pr_head=` when available for a PR-ready task, then arm the watcher's merge poll        |
+| `fm-pr-check.sh`         | Record `pr=` and a verified `pr_head=` when available for a PR-ready task, then arm the watcher's merge poll; for a Linear-linked task it also additively wakes `pr-feedback <id>` once per new PR review from a baselined seen-cursor |
 | `fm-promote.sh`          | Promote a scout task in place so it becomes a protected ship task                                                   |
 | `fm-teardown.sh`         | Return a clean, landed ship worktree or retire/release a secondmate home; requires scout reports, checks child work, and prints the backlog reminder |
 | `fm-harness.sh`          | Detect the running harness; resolve the effective crewmate harness                                                  |
@@ -44,3 +44,8 @@ Each file also starts with a short header comment.
 | `fm-x-followup.sh`       | Detect, post, and clear the single completion follow-up for an X-linked task, enforcing the local 24h window and retrying only when the relay post fails |
 | `fm-linear-lib.sh`       | Shared Linear-mode `.env`, alternate env-file, raw-key auth, GraphQL, state name/type classification, project/team -> repo resolver, and task-to-issue meta-link helpers |
 | `fm-linear-poll.sh`      | Do one bounded Linear GraphQL poll of bot-assigned tickets; without `LINEAR_API_KEY` it is a silent no-op, otherwise it stashes each ticket node and prints `linear-ready`/`linear-canceled`/`linear-groom <issue-id>` wakes with per-issue seen-marker dedupe |
+| `fm-linear-issue.sh`     | Fetch and print a bot-assigned ticket's fields (identifier, title, description, state, assignee, branchName, labels, recent comments) via `jq` so untrusted text is never interpolated |
+| `fm-linear-comment.sh`   | Post or dry-run preview a Backlog-grooming-only comment, with the body read from an argument, `--text-file`, or stdin so untrusted ticket text is never inlined |
+| `fm-linear-move.sh`      | Transition a ticket by role (`in-progress`/`in-review`), resolving the role to a workflow-state id by name (position-sorted `started`-type fallback for in-progress only); honors `LINEAR_DRY_RUN`, recording the resolved transition to `state/linear-outbox/<issue>.move.json` (the resolving read still runs) |
+| `fm-linear-link.sh`      | Link a ship task to its Linear ticket by recording `linear_issue=` and `linear_branch=` in `state/<id>.meta`         |
+| `fm-linear-risk.sh`      | Evaluate the deterministic GO/HOLD risk rubric from structural/fleet facts and semantic hard-stop flags, with at-cap wait and uncertainty defaulting to HOLD |
