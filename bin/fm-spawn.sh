@@ -387,7 +387,7 @@ if [ "$KIND" != secondmate ]; then
   # during shell init (a cd into a stray repo like ~/.oh-my-zsh, of any duration)
   # is simply waited out until the pane settles at the real worktree, and the
   # spawn aborts only if no valid worktree appears within the timeout.
-  proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P || true)
+  proj_real=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || true
   proj_common=$(fm_git_common_dir_abs "$PROJ_ABS" || true)
   if [ -z "$proj_common" ]; then
     echo "error: project checkout $PROJ_ABS is not a git repository; cannot resolve an isolated worktree. Inspect window $T" >&2

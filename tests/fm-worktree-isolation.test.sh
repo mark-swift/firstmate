@@ -22,7 +22,7 @@ set -u
 . "$ROOT/bin/fm-worktree-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-worktree-isolation)
-fm_git_identity
+fm_git_identity fmtest fmtest@example.invalid
 
 # Build a primary checkout, a real treehouse-style worktree of it, and a stray
 # repo standing in for ~/.oh-my-zsh.
