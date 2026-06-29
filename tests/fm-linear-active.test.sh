@@ -290,6 +290,47 @@ test_move_no_matching_state_holds() {
   pass "fm-linear-move fails cleanly when no state matches the role"
 }
 
+test_move_dry_run_resolves_but_suppresses_write() {
+  local home fakebin log out rc body posts
+  home="$TMP_ROOT/move-dry"; mkdir -p "$home"
+  fakebin=$(make_fake_curl "$home")
+  log="$home/curl.log"
+  printf 'LINEAR_API_KEY=lin_k\n' > "$home/.env"
+  # In Review is returned BEFORE In Progress and has a lower-precedence position;
+  # the position sort must still pick In Progress (st-prog, position 1).
+  body='{"data":{"issue":{"id":"iss-d","team":{"states":{"nodes":[{"id":"st-rev","name":"In Review","type":"started","position":2},{"id":"st-prog","name":"In Progress","type":"started","position":1}]}}},"issueUpdate":{"success":true,"issue":{"id":"iss-d","state":{"name":"In Progress"}}}}}'
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" LINEAR_API_URL="https://linear.test/graphql" \
+    LINEAR_DRY_RUN=1 FAKE_CURL_LOG="$log" FAKE_GQL_CODE=200 FAKE_GQL_BODY="$body" \
+    "$ROOT/bin/fm-linear-move.sh" iss-d in-progress); rc=$?
+  expect_code 0 "$rc" "move dry-run exit"
+  assert_contains "$out" "moved iss-d to in-progress (dry-run)" "dry-run must echo the would-be move"
+  # The resolved transition is recorded under a DISTINCT .move.json key.
+  assert_present "$home/state/linear-outbox/iss-d.move.json" "move dry-run must record the would-be transition"
+  assert_absent "$home/state/linear-outbox/iss-d.json" "move preview must not collide with a comment preview key"
+  [ "$(jq -r .stateId "$home/state/linear-outbox/iss-d.move.json")" = "st-prog" ] \
+    || fail "dry-run must record the resolved In Progress state id (position-sorted)"
+  [ "$(jq -r .endpoint "$home/state/linear-outbox/iss-d.move.json")" = "issueUpdate" ] \
+    || fail "dry-run record must mark the endpoint"
+  # The READ happened (resolution needs it) but the WRITE did not: exactly one POST,
+  # and the log never carries the issueUpdate mutation.
+  posts=$(grep -c '^method=POST' "$log" 2>/dev/null || echo 0)
+  [ "$posts" = "1" ] || fail "move dry-run must do exactly one call (the states read), got $posts"
+  grep -F 'issueUpdate' "$log" >/dev/null 2>&1 && fail "move dry-run must not send the issueUpdate mutation"
+  pass "fm-linear-move dry-run resolves the state via the read but suppresses the write"
+}
+
+test_move_dry_run_needs_key_for_read() {
+  local home rc
+  home="$TMP_ROOT/move-dry-nokey"; mkdir -p "$home"
+  # Unlike a comment dry-run (fully offline), a move dry-run still needs the key for
+  # the states read; with no key it must refuse rather than pretend to resolve.
+  PATH="$BASE_PATH" FM_HOME="$home" LINEAR_API_KEY='' LINEAR_DRY_RUN=1 \
+    "$ROOT/bin/fm-linear-move.sh" iss-x in-progress >/dev/null 2>&1; rc=$?
+  expect_code 1 "$rc" "move dry-run without a key must fail (the read needs it)"
+  assert_absent "$home/state/linear-outbox/iss-x.move.json" "no key -> no dry-run record"
+  pass "fm-linear-move dry-run still requires the key for the states read"
+}
+
 # ---------------------------------------------------------------------------
 # Risk rubric (fm-linear-risk)
 
@@ -513,6 +554,8 @@ test_move_in_review_resolves_state_id
 test_move_type_fallback_for_custom_in_progress
 test_move_rejects_unknown_role
 test_move_no_matching_state_holds
+test_move_dry_run_resolves_but_suppresses_write
+test_move_dry_run_needs_key_for_read
 test_risk_go_when_all_clear
 test_risk_each_hard_stop_holds
 test_risk_unresolved_repo_holds

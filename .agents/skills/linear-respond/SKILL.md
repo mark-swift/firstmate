@@ -181,4 +181,5 @@ For each `state/linear-inbox/<issue-id>.json`:
 - In-progress questions and decisions go through **firstmate** (and Lavish), **never** Linear comments. Linear writes are grooming-only.
 - Destructive, irreversible, or security-sensitive tickets are hard-stops: HOLD and escalate to the captain; never ship them straight from a Linear assignment.
 - Uncertainty defaults to HOLD. A wrong dispatch is expensive; a held ticket with one sharp question is cheap.
+- `LINEAR_DRY_RUN` (truthy) makes both Linear-write helpers preview instead of writing, for safe end-to-end testing: `bin/fm-linear-comment.sh` records the comment to `state/linear-outbox/<issue>.json` (fully offline), and `bin/fm-linear-move.sh` records the resolved transition to `state/linear-outbox/<issue>.move.json` (the states read still runs to resolve the id, so it needs the key). Inspect `state/linear-outbox/` to see what would have gone out.
 - Never edit `bin/fm-linear-poll.sh`, `bin/fm-watch.sh`, `bin/fm-watch-arm.sh`, or the afk daemon to "respond faster"; the cadence is handled in bootstrap.

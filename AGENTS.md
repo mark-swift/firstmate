@@ -95,7 +95,7 @@ state/               volatile runtime signals; gitignored
   x-poll.error       generated X-mode relay diagnostic dedupe marker
   linear-watch.check.sh  generated Linear-mode poll shim; present only when opted in (section 15)
   linear-inbox/      generated Linear-mode bot-assigned ticket payloads, keyed by issue id; drained by the linear-respond skill (section 15)
-  linear-outbox/     generated Linear-mode dry-run grooming-comment previews; inspect when LINEAR_DRY_RUN is set (section 15)
+  linear-outbox/     generated Linear-mode dry-run previews (grooming comments as <issue>.json, state transitions as <issue>.move.json); inspect when LINEAR_DRY_RUN is set (section 15)
   linear-seen/       generated Linear-mode per-issue seen markers (<id>.state, <id>.comment) so each event wakes once (section 15)
   linear-poll.error  generated Linear-mode diagnostic dedupe marker
   .wake-queue        durable queued wakes: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
@@ -817,7 +817,7 @@ It uses the Linear-specific helper CLIs, which mirror the X-mode helpers and tre
 
 - `bin/fm-linear-issue.sh <issue-id>` - fetch and print a ticket's fields (identifier, title, description, state, assignee, `branchName`, labels, recent comments).
 - `bin/fm-linear-comment.sh <issue-id> --text-file <path>` - post a Backlog grooming comment (never for in-progress work; honors `LINEAR_DRY_RUN`).
-- `bin/fm-linear-move.sh <issue-id> in-progress|in-review` - transition a ticket by configured role (resolving the role to the workspace's state id via the lib).
+- `bin/fm-linear-move.sh <issue-id> in-progress|in-review` - transition a ticket by configured role (resolving the role to the workspace's state id via the lib; honors `LINEAR_DRY_RUN`, recording the resolved transition to `state/linear-outbox/<issue-id>.move.json` - the live states read still runs to resolve the id, so a move dry-run needs the key, unlike a comment dry-run).
 - `bin/fm-linear-link.sh <task-id> <issue-id> [branch]` - record `linear_issue=`/`linear_branch=` in `state/<id>.meta` (parallels `fm-x-link.sh`).
 - `bin/fm-linear-risk.sh ...` - evaluate the risk rubric and print GO (exit 0) or HOLD with reasons (exit 1).
 
